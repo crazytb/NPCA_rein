@@ -17,13 +17,13 @@ base_config = {
 }
 
 # 후보 값
-sta_values = [2, 6, 10]  # 각 채널의 STA 수
-# sta_values = [2]  # 각 채널의 STA 수
-frame_sizes = [frame_size, frame_size * 5]
-# frame_sizes = [frame_size]
+# sta_values = [2, 6, 10]  # 각 채널의 STA 수
+sta_values = [2]  # 각 채널의 STA 수
+# frame_sizes = [frame_size, frame_size * 5]
+frame_sizes = [frame_size]
 frame_labels = {33: "fshort", 33*5: "flong"}
-# npca_options = [[False, True]]  # 추가된 부분
-npca_options = [[False, True], [False, False]]  # 추가된 부분
+npca_options = [[False, True]]  # 추가된 부분
+# npca_options = [[False, True], [False, False]]  # 추가된 부분
 
 # 시뮬레이션 설정 생성
 simulation_configs = []

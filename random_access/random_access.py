@@ -202,7 +202,7 @@ class STA:
             self.next_state = STAState.PRIMARY_FROZEN
         # 2. Primary 채널이 OBSS busy: NPCA enabled 여부에 따라 다름
         elif self.primary_channel.is_busy_by_obss(slot):
-            # NPCA enabled인 경우
+            # NPCA enabled인 경우 --> 여기서 action decision이 들어가야 함 (+ backoff 설정까지?)
             if self.npca_enabled and self.npca_channel:
                 self.current_obss = self.primary_channel.get_latest_obss(slot)
                 self.cw_index = 0
@@ -227,21 +227,12 @@ class STA:
             else:
                 self.backoff -= 1 if self.backoff > 0 else 0
         return
-    
-        
 
     def _handle_primary_frozen(self, slot: int):
         if not self.primary_channel.is_busy(slot):
             self.next_state = STAState.PRIMARY_BACKOFF
 
     def _handle_primary_tx(self, slot: int):
-        # 전송 시작 시 occupy_request 설정 (딱 한 번)
-        # if self.tx_remaining == self.ppdu_duration:  # 시작 시점
-        #     self.occupy_request = OccupyRequest(
-        #         channel_id=self.primary_channel.channel_id, 
-        #         duration=self.tx_remaining, 
-        #         is_obss=False)
-
         # Primary_tx 동안 OBSS 점유 히스토리가 있다면 무조건 tx_success is False
         if self.primary_channel.is_busy_by_obss(slot):
             self.tx_success = False
@@ -277,71 +268,7 @@ class STA:
             else:
                 self.backoff -= 1 if self.backoff > 0 else 0
 
-        # # Similar to _handle_primary_backoff
-        # if self.backoff == 0:
-        #     self.ppdu_duration = self.get_tx_duration()
-        #     self.tx_remaining = self.ppdu_duration
-        #     self.occupy_request = OccupyRequest(
-        #         channel_id=self.npca_channel.channel_id,
-        #         duration=self.tx_remaining,
-        #         is_obss=True
-        #     )
-        #     self.next_state = STAState.NPCA_TX
-        # else:
-        #     # 1. npca 채널이 busy → NPCA_FROZEN
-        #     if self.npca_channel.is_busy(slot):
-        #         self.next_state = STAState.NPCA_FROZEN
-        #     # 2. npca 채널이 busy하지 않으면 backoff
-        #     else:
-        #         self.backoff -= 1 if self.backoff > 0 else 0
-
-            
-        # if self.current_obss is None:
-        #     # OBSS duration이 사라졌다면 전송 불가 → Primary 복귀
-        #     self.next_state = STAState.PRIMARY_BACKOFF
-        #     self.cw_index = 0
-        #     self.backoff = self.generate_backoff()
-        #     return
-
-        # obss_start, obss_dur = self.current_obss[1], self.current_obss[2]
-        # obss_end = obss_start + obss_dur
-        # self.ppdu_duration = obss_end - slot
-
-        # if self.ppdu_duration <= 0:
-        #     # OBSS duration이 끝났음 → stay in NPCA_BACKOFF
-        #     return
-
-        # # 4. 전송 준비 완료 → occupy 대상은 원래 primary 채널 (e.g., channel 1의 STA → channel 0 점유)
-        # self.tx_remaining = self.ppdu_duration
-        # self.occupy_request = OccupyRequest(
-        #         channel_id=self.npca_channel.channel_id,  # NPCA 채널 ID
-        #         duration=self.tx_remaining,               # duration
-        #         is_obss=True                              # OBSS 전송
-        #     )
-        # self.next_state = STAState.NPCA_TX
-
     def _handle_npca_frozen(self, slot: int):
-        # # OBSS 정보가 더 이상 유효하지 않으면 primary로 복귀
-        # if self.current_obss is None:
-        #     self.next_state = STAState.PRIMARY_BACKOFF
-        #     self.cw_index = 0
-        #     self.backoff = self.generate_backoff()
-        #     return
-
-        # obss_start, obss_dur = self.current_obss[1], self.current_obss[2]
-        # obss_end = obss_start + obss_dur
-
-        # # OBSS duration이 끝나면 primary로 복귀
-        # if slot >= obss_end:
-        #     self.next_state = STAState.PRIMARY_BACKOFF
-        #     self.cw_index = 0
-        #     self.backoff = self.generate_backoff()
-        #     self.current_obss = None
-        #     return
-
-        # # NPCA 채널이 idle → backoff 재개
-        # if not self.npca_channel.is_busy_by_intra_bss(slot):
-        #     self.next_state = STAState.NPCA_BACKOFF
         if self.primary_channel.obss_remain == 0:
             self.cw_index = 0
             self.backoff = self.generate_backoff()
@@ -352,14 +279,6 @@ class STA:
 
 
     def _handle_npca_tx(self, slot: int):
-        # 전송 시작 시 OBSS 점유 요청 (딱 한 번)
-        # if self.tx_remaining == self.ppdu_duration:
-        #     self.occupy_request = OccupyRequest(
-        #         channel_id=self.npca_channel.channel_id,  # NPCA 채널 ID
-        #         duration=self.tx_remaining,               # duration
-        #         is_obss=True                              # OBSS 전송
-        #     )
-
         if self.tx_remaining > 0:
             self.tx_remaining -= 1
             return
