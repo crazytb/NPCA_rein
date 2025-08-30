@@ -18,7 +18,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from drl_framework.custom_env import *
-from drl_framework.dqn import *
+from drl_framework.network import *
 from drl_framework.params import *
 
 # if GPU is to be used

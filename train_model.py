@@ -3,7 +3,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 
 from drl_framework.custom_env import CustomEnv
-from drl_framework.dqn import DQN
+from drl_framework.network import DQN
 from drl_framework.params import *
 from drl_framework.train import train
 
