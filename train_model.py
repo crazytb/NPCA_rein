@@ -8,7 +8,12 @@ from drl_framework.params import *
 from drl_framework.train import train
 
 # Device 설정
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
 print("Device:", device)
 
 # 환경 초기화
@@ -30,7 +35,7 @@ target_net.load_state_dict(policy_net.state_dict())
 optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
 
 # 학습 실행
-num_episodes = 2000 if torch.cuda.is_available() else 50
+num_episodes = 1000 if device == torch.device("cuda") or device == torch.device("mps") else 50
 rewards = train(env, policy_net, target_net, optimizer, device, num_episodes)
 
 # ===== 시각화 =====
