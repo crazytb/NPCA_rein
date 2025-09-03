@@ -1,6 +1,7 @@
 import pandas as pd
 import torch
 import random
+import math
 from typing import List
 
 # Copy-pasting the given code components into the environment to enable simulation
@@ -139,7 +140,8 @@ class STA:
                  npca_channel: Optional[Channel] = None, 
                  npca_enabled: bool = False, 
                  radio_transition_time: int = 1,
-                 ppdu_duration: int = 10):
+                 ppdu_duration: int = 10,
+                 learner=None):
         self.sta_id = sta_id
         self.channel_id = channel_id
         self.primary_channel = primary_channel
@@ -147,6 +149,7 @@ class STA:
         self.npca_enabled = npca_enabled
         self.radio_transition_time = radio_transition_time
         self.occupy_request: Optional[OccupyRequest] = None
+        self.learner = learner  # SemiMDPLearner 인스턴스
 
         self.state = STAState.PRIMARY_BACKOFF
         self.next_state = self.state
@@ -154,7 +157,7 @@ class STA:
         self.backoff = self.generate_backoff() + 1
         self.tx_remaining = 0
         self.ppdu_duration = ppdu_duration
-        # self.current_obss: Optional[OBSSTraffic] = None
+        self.current_obss = None
         self.intent = None
 
         # 옵션 관련 변수 초기화
@@ -216,6 +219,17 @@ class STA:
         x[2] = min(x[2], caps["slots"]) / caps["slots"]
         x[3] = min(x[3], caps["cw_stage_max"]) / caps["cw_stage_max"]
         return x
+    
+    def calculate_reward(self, slot: int) -> float:
+        """전송 완료 시 PPDU 길이만큼 보상"""
+        reward = 0.0
+        
+        # 전송 완료 시에만 보상 지급
+        if self.tx_remaining == 0 and (self.state == STAState.PRIMARY_TX or self.state == STAState.NPCA_TX):
+            if hasattr(self, 'tx_success') and self.tx_success:
+                reward = float(self.ppdu_duration)  # 성공한 PPDU 길이만큼 보상
+        
+        return reward
 
     def step(self, slot: int):
         if self.state == STAState.PRIMARY_BACKOFF:
@@ -238,41 +252,52 @@ class STA:
         # 2. Primary 채널이 OBSS busy: NPCA enabled 여부에 따라 다름
         elif self.primary_channel.is_busy_by_obss(slot):
             # NPCA enabled인 경우
-            if self.npca_enabled and self.npca_channel:
-                # [결정 시점] 현재 관측
-                obs_dict = self.get_obs()
-                obs_vec = self.obs_to_vec(obs_dict, normalize=True)
+            if self.npca_enabled and self.npca_channel and self.learner:
+                # 옵션이 이미 활성화되어 있지 않은 경우에만 새 결정 시점으로 처리
+                if not self._opt_active:
+                    # [결정 시점] 현재 관측
+                    obs_dict = self.get_obs()
+                    obs_vec = self.obs_to_vec(obs_dict, normalize=True)
 
-                # 직전 옵션이 끝나 pending이 있다면 지금 관측을 s'로 붙여 push
-                self._finalize_pending_with_next_state(
-                    next_obs_vec=obs_vec,
-                    memory=self.learner.memory,   # 또는 시뮬레이터에서 주입한 메모리
-                    done=False,
-                    device=self.learner.device
-                )
+                    # 직전 옵션이 끝나 pending이 있다면 지금 관측을 s'로 붙여 push
+                    self._finalize_pending_with_next_state(
+                        next_obs_vec=obs_vec,
+                        memory=self.learner.memory,
+                        done=False,
+                        device=self.learner.device
+                    )
 
-                # 액션 선택 (결정 시점 발생 횟수로만 epsilon 증가)
-                action = self.policy.select_action(
-                    torch.tensor(obs_vec, dtype=torch.float32, device=self.learner.device).unsqueeze(0)
-                )
-                self.learner.steps_done += 1
+                    # 액션 선택 (epsilon-greedy)
+                    state_tensor = torch.tensor(obs_vec, dtype=torch.float32, device=self.learner.device).unsqueeze(0)
+                    action = self.learner.select_action(state_tensor)
+                    self.learner.steps_done += 1
 
-                # 옵션 시작 (이번 (s,a) 기록)
-                self._begin_option(obs_dict, int(action))
+                    # 옵션 시작 (이번 (s,a) 기록)
+                    self._begin_option(obs_dict, int(action))
 
-                # 기존 분기 유지
-                self.current_obss = self.primary_channel.get_latest_obss(slot)
-                self.cw_index = 0
-                self.backoff = self.generate_backoff()
+                    # 기존 분기 유지
+                    self.current_obss = self.primary_channel.get_latest_obss(slot)
+                    self.cw_index = 0
+                    self.backoff = self.generate_backoff()
 
-                if action == 0:
-                    self.next_state = STAState.PRIMARY_FROZEN
-                else:
-                    if self.npca_channel.is_busy_by_intra_bss(slot):
-                        self.next_state = STAState.NPCA_FROZEN
-                    # NPCA 채널이 busy하지 않으면 backoff
+                    if action == 0:
+                        self.next_state = STAState.PRIMARY_FROZEN
                     else:
-                        self.next_state = STAState.NPCA_BACKOFF
+                        if self.npca_channel.is_busy_by_intra_bss(slot):
+                            self.next_state = STAState.NPCA_FROZEN
+                        # NPCA 채널이 busy하지 않으면 backoff
+                        else:
+                            self.next_state = STAState.NPCA_BACKOFF
+                # 옵션이 이미 활성화되어 있는 경우, 기존 action을 사용해서 상태 유지
+                else:
+                    if self._opt_a == 0:
+                        self.next_state = STAState.PRIMARY_FROZEN
+                    else:
+                        if self.npca_channel.is_busy_by_intra_bss(slot):
+                            self.next_state = STAState.NPCA_FROZEN
+                        # NPCA 채널이 busy하지 않으면 backoff
+                        else:
+                            self.next_state = STAState.NPCA_BACKOFF
             else:
                 self.next_state = STAState.PRIMARY_FROZEN
         # 3. Primary 채널이 idle:
@@ -312,7 +337,7 @@ class STA:
                 self.handle_success()  # 전송 성공 처리
             else:
                 self.handle_collision()  # 전송 실패 처리
-        self._end_option()
+            self._end_option()  # Only end option when transmission completes
 
     def _handle_npca_backoff(self, slot: int):
         # 1. NPCA 채널이 busy: frozen
@@ -369,9 +394,10 @@ class STA:
         self._opt_R = 0.0
         self._opt_tau = 0
 
-    def _accum_option_reward(self, r):
+    def _accum_option_reward(self, slot: int):
         if self._opt_active:
-            self._opt_R += float(r)
+            reward = self.calculate_reward(slot)
+            self._opt_R += reward
             self._opt_tau += 1
 
     def _end_option(self):
@@ -384,17 +410,17 @@ class STA:
             self._opt_R = 0.0
             self._opt_tau = 0
 
-    def _finalize_pending_with_next_state(self, next_s_dict_vec, memory, done: bool, normalize=True, device=None):
+    def _finalize_pending_with_next_state(self, next_obs_vec, memory, done: bool, normalize=True, device=None):
         """
         다음 '결정 시점'에서 호출.
-        pending 있으면 s'로 next_s_dict_vec를 채워 replay buffer에 push.
+        pending 있으면 s'로 next_obs_vec를 채워 replay buffer에 push.
         """
         if self._pending is None:
             return
         s_dict, a, R, tau = self._pending
         s_vec  = self.obs_to_vec(s_dict, normalize=normalize)
         s_vec  = torch.tensor(s_vec, dtype=torch.float32, device=device)
-        s_next = torch.tensor(next_s_dict_vec, dtype=torch.float32, device=device)
+        s_next = torch.tensor(next_obs_vec, dtype=torch.float32, device=device)
         memory.push(s_vec, a, s_next, R, tau, done)  # (state, action, next_state, cum_reward, tau, done)
         self._pending = None
 
@@ -457,7 +483,7 @@ class Simulator:
 
             # ⑧ 상태 전이 및 초기화
             for sta in self.stas:
-                sta._accum_option_reward(0)
+                sta._accum_option_reward(slot)
                 sta.state = sta.next_state
 
             # ⑨ 로그 저장

@@ -13,6 +13,81 @@ from drl_framework.params import *
 Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'cum_reward', 'tau', 'done'))
 
+class SemiMDPLearner:
+    def __init__(self, n_observations, n_actions, device, memory_capacity=10000, lr=LR):
+        self.device = device
+        self.n_observations = n_observations
+        self.n_actions = n_actions
+        self.steps_done = 0
+        
+        # DQN 네트워크 초기화
+        self.policy_net = DQN(n_observations, n_actions).to(device)
+        self.target_net = DQN(n_observations, n_actions).to(device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        
+        # Optimizer 및 Memory 초기화
+        self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=True)
+        self.memory = ReplayMemory(memory_capacity)
+    
+    def select_action(self, state_tensor):
+        """Epsilon-greedy action selection for Semi-MDP"""
+        eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * self.steps_done / EPS_DECAY)
+        
+        if random.random() > eps_threshold:
+            with torch.no_grad():
+                return self.policy_net(state_tensor).max(1)[1].item()
+        else:
+            return random.randint(0, self.n_actions - 1)
+    
+    def optimize_model(self):
+        """Semi-MDP용 최적화 함수 - 옵션 기반 학습"""
+        if len(self.memory) < BATCH_SIZE:
+            return
+            
+        transitions = self.memory.sample(BATCH_SIZE)
+        batch = Transition(*zip(*transitions))
+
+        state_batch = torch.stack(batch.state).to(self.device)
+        action_batch = torch.tensor(batch.action, device=self.device).long().unsqueeze(1)
+        R_batch = torch.tensor(batch.cum_reward, device=self.device).float()  # 옵션 누적 보상
+        tau_batch = torch.tensor(batch.tau, device=self.device).float()       # 옵션 길이(슬롯 수)
+        done_batch = torch.tensor(batch.done, device=self.device).float()     # 1.0 if done else 0.0
+
+        # Q(s_t, a)
+        q_sa = self.policy_net(state_batch).gather(1, action_batch).squeeze(1)
+
+        # max_a' Q_target(s', a') for non-terminal only
+        non_final_mask = (done_batch == 0)
+        non_final_next_states = torch.stack(
+            [s for s, d in zip(batch.next_state, batch.done) if not d]
+        ).to(self.device)
+
+        next_state_values = torch.zeros(len(state_batch), device=self.device)
+        with torch.no_grad():
+            if non_final_next_states.numel() > 0:
+                next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0]
+
+        # Semi-MDP TD Target: R + γ^τ * V(s') for non-terminal states
+        td_target = R_batch + (GAMMA ** tau_batch) * next_state_values * (1.0 - done_batch)
+        loss = F.smooth_l1_loss(q_sa, td_target)
+
+        # Optimize
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+        self.optimizer.step()
+        
+        return loss.item()
+    
+    def update_target_network(self):
+        """Soft update of target network"""
+        target_net_state_dict = self.target_net.state_dict()
+        policy_net_state_dict = self.policy_net.state_dict()
+        for key in policy_net_state_dict:
+            target_net_state_dict[key] = policy_net_state_dict[key] * TAU + \
+                                         target_net_state_dict[key] * (1 - TAU)
+        self.target_net.load_state_dict(target_net_state_dict)
+
 def select_action(state, policy_net, env, steps_done, device):
     """Epsilon-greedy action selection"""
     sample = random.random()
@@ -117,3 +192,88 @@ def train(env, policy_net, target_net, optimizer, device, num_episodes=50):
                 break
 
     return episode_rewards
+
+def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episode=1000, device=None):
+    """
+    Semi-MDP를 사용한 NPCA STA 학습 함수
+    
+    Args:
+        channels: 채널 리스트
+        stas_config: STA 설정 리스트
+        num_episodes: 학습 에피소드 수
+        num_slots_per_episode: 에피소드당 슬롯 수
+        device: torch device
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # SemiMDPLearner 초기화
+    n_observations = 4  # obs feature 개수
+    n_actions = 2       # 0=StayPrimary, 1=GoNPCA
+    learner = SemiMDPLearner(n_observations, n_actions, device)
+    
+    episode_rewards = []
+    episode_losses = []
+    
+    print(f"Starting Semi-MDP training on {device}")
+    print(f"Episodes: {num_episodes}, Slots per episode: {num_slots_per_episode}")
+    
+    for episode in range(num_episodes):
+        # 채널 상태 초기화
+        for ch in channels:
+            ch.intra_occupied = False
+            ch.intra_end_slot = 0
+            ch.obss_traffic = []
+            ch.occupied_remain = 0
+            ch.obss_remain = 0
+        
+        # STA 생성 및 초기화 (각 에피소드마다 새로 생성)  
+        from drl_framework.random_access import STA, Simulator
+        stas = []
+        for config in stas_config:
+            sta = STA(
+                sta_id=config["sta_id"],
+                channel_id=config["channel_id"],
+                primary_channel=channels[config["channel_id"]],
+                npca_channel=channels[0] if config["channel_id"] == 1 else None,
+                npca_enabled=config.get("npca_enabled", False),
+                radio_transition_time=config.get("radio_transition_time", 1),
+                ppdu_duration=config.get("ppdu_duration", 33),
+                learner=learner if config.get("npca_enabled", False) else None
+            )
+            stas.append(sta)
+        
+        # 시뮬레이터 실행
+        simulator = Simulator(num_slots=num_slots_per_episode, channels=channels, stas=stas)
+        simulator.memory = learner.memory
+        simulator.device = device
+        simulator.run()
+        
+        # 에피소드별 통계 수집
+        total_reward = 0
+        for sta in stas:
+            if sta._pending:
+                total_reward += sta._pending[2]  # cumulative reward
+        episode_rewards.append(total_reward)
+        
+        # 학습 수행
+        if len(learner.memory) >= BATCH_SIZE:
+            for _ in range(5):  # 에피소드당 5번 학습
+                loss = learner.optimize_model()
+                if loss is not None:
+                    episode_losses.append(loss)
+            
+            # Target network 업데이트
+            learner.update_target_network()
+        
+        # 진행 상황 출력
+        if episode % 10 == 0:
+            avg_reward = sum(episode_rewards[-10:]) / min(10, len(episode_rewards))
+            avg_loss = sum(episode_losses[-10:]) / max(1, len(episode_losses[-10:]))
+            epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * learner.steps_done / EPS_DECAY)
+            print(f"Episode {episode:3d}: Avg Reward = {avg_reward:6.2f}, "
+                  f"Avg Loss = {avg_loss:.4f}, Epsilon = {epsilon:.3f}, "
+                  f"Memory Size = {len(learner.memory)}")
+    
+    print("Training completed!")
+    return episode_rewards, episode_losses, learner
