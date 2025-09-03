@@ -1,4 +1,5 @@
 import pandas as pd
+import torch
 import random
 from typing import List
 
@@ -156,6 +157,14 @@ class STA:
         # self.current_obss: Optional[OBSSTraffic] = None
         self.intent = None
 
+        # 옵션 관련 변수 초기화
+        self._opt_active = False
+        self._opt_s = None          # dict (관측 원본; 나중에 벡터화)
+        self._opt_a = None          # int (0=StayPrimary, 1=GoNPCA 등)
+        self._opt_R = 0.0           # 누적 보상 (슬롯 합산)
+        self._opt_tau = 0           # 옵션 sojourn length (슬롯 수)
+        self._pending = None        # (s_dict, a, cum_R, tau) — 다음 결정 때 s' 채워 push
+
     def generate_backoff(self) -> int:
         cw = CONTENTION_WINDOW[self.cw_index]
         return random.randint(0, cw)
@@ -181,6 +190,32 @@ class STA:
         if is_npca:
             return min(self.primary_channel.obss_remain, self.ppdu_duration)
         return self.ppdu_duration
+    
+    def get_obs(self):
+        obs = {
+            "primary_channel_obss_occupied_remained": self.primary_channel.obss_remain,
+            "radio_transition_time": self.radio_transition_time,
+            "tx_duration": self.get_tx_duration(),
+            "cw_index": self.cw_index,
+        }
+        return obs
+    
+    def obs_to_vec(self, obs: dict, normalize: bool = False, caps=None):
+        FEATURE_ORDER = (
+            "primary_channel_obss_occupied_remained",
+            "radio_transition_time",
+            "tx_duration",
+            "cw_index",
+        )
+        x = [float(obs[k]) for k in FEATURE_ORDER]
+        if not normalize:
+            return x
+        caps = caps or {"slots": 1024, "cw_stage_max": 8}
+        x[0] = min(x[0], caps["slots"]) / caps["slots"]
+        x[1] = min(x[1], caps["slots"]) / caps["slots"]
+        x[2] = min(x[2], caps["slots"]) / caps["slots"]
+        x[3] = min(x[3], caps["cw_stage_max"]) / caps["cw_stage_max"]
+        return x
 
     def step(self, slot: int):
         if self.state == STAState.PRIMARY_BACKOFF:
@@ -204,15 +239,40 @@ class STA:
         elif self.primary_channel.is_busy_by_obss(slot):
             # NPCA enabled인 경우
             if self.npca_enabled and self.npca_channel:
+                # [결정 시점] 현재 관측
+                obs_dict = self.get_obs()
+                obs_vec = self.obs_to_vec(obs_dict, normalize=True)
+
+                # 직전 옵션이 끝나 pending이 있다면 지금 관측을 s'로 붙여 push
+                self._finalize_pending_with_next_state(
+                    next_obs_vec=obs_vec,
+                    memory=self.learner.memory,   # 또는 시뮬레이터에서 주입한 메모리
+                    done=False,
+                    device=self.learner.device
+                )
+
+                # 액션 선택 (결정 시점 발생 횟수로만 epsilon 증가)
+                action = self.policy.select_action(
+                    torch.tensor(obs_vec, dtype=torch.float32, device=self.learner.device).unsqueeze(0)
+                )
+                self.learner.steps_done += 1
+
+                # 옵션 시작 (이번 (s,a) 기록)
+                self._begin_option(obs_dict, int(action))
+
+                # 기존 분기 유지
                 self.current_obss = self.primary_channel.get_latest_obss(slot)
                 self.cw_index = 0
                 self.backoff = self.generate_backoff()
-                # NPCA 채널이 busy인지 확인
-                if self.npca_channel.is_busy_by_intra_bss(slot):
-                    self.next_state = STAState.NPCA_FROZEN
-                # NPCA 채널이 busy하지 않으면 backoff
+
+                if action == 0:
+                    self.next_state = STAState.PRIMARY_FROZEN
                 else:
-                    self.next_state = STAState.NPCA_BACKOFF
+                    if self.npca_channel.is_busy_by_intra_bss(slot):
+                        self.next_state = STAState.NPCA_FROZEN
+                    # NPCA 채널이 busy하지 않으면 backoff
+                    else:
+                        self.next_state = STAState.NPCA_BACKOFF
             else:
                 self.next_state = STAState.PRIMARY_FROZEN
         # 3. Primary 채널이 idle:
@@ -228,20 +288,11 @@ class STA:
                 self.backoff -= 1 if self.backoff > 0 else 0
         return
     
-        
-
     def _handle_primary_frozen(self, slot: int):
         if not self.primary_channel.is_busy(slot):
             self.next_state = STAState.PRIMARY_BACKOFF
 
     def _handle_primary_tx(self, slot: int):
-        # 전송 시작 시 occupy_request 설정 (딱 한 번)
-        # if self.tx_remaining == self.ppdu_duration:  # 시작 시점
-        #     self.occupy_request = OccupyRequest(
-        #         channel_id=self.primary_channel.channel_id, 
-        #         duration=self.tx_remaining, 
-        #         is_obss=False)
-
         # Primary_tx 동안 OBSS 점유 히스토리가 있다면 무조건 tx_success is False
         if self.primary_channel.is_busy_by_obss(slot):
             self.tx_success = False
@@ -261,6 +312,7 @@ class STA:
                 self.handle_success()  # 전송 성공 처리
             else:
                 self.handle_collision()  # 전송 실패 처리
+        self._end_option()
 
     def _handle_npca_backoff(self, slot: int):
         # 1. NPCA 채널이 busy: frozen
@@ -279,71 +331,9 @@ class STA:
             else:
                 self.backoff -= 1 if self.backoff > 0 else 0
 
-        # # Similar to _handle_primary_backoff
-        # if self.backoff == 0:
-        #     self.ppdu_duration = self.get_tx_duration()
-        #     self.tx_remaining = self.ppdu_duration
-        #     self.occupy_request = OccupyRequest(
-        #         channel_id=self.npca_channel.channel_id,
-        #         duration=self.tx_remaining,
-        #         is_obss=True
-        #     )
-        #     self.next_state = STAState.NPCA_TX
-        # else:
-        #     # 1. npca 채널이 busy → NPCA_FROZEN
-        #     if self.npca_channel.is_busy(slot):
-        #         self.next_state = STAState.NPCA_FROZEN
-        #     # 2. npca 채널이 busy하지 않으면 backoff
-        #     else:
-        #         self.backoff -= 1 if self.backoff > 0 else 0
-
-            
-        # if self.current_obss is None:
-        #     # OBSS duration이 사라졌다면 전송 불가 → Primary 복귀
-        #     self.next_state = STAState.PRIMARY_BACKOFF
-        #     self.cw_index = 0
-        #     self.backoff = self.generate_backoff()
-        #     return
-
-        # obss_start, obss_dur = self.current_obss[1], self.current_obss[2]
-        # obss_end = obss_start + obss_dur
-        # self.ppdu_duration = obss_end - slot
-
-        # if self.ppdu_duration <= 0:
-        #     # OBSS duration이 끝났음 → stay in NPCA_BACKOFF
-        #     return
-
-        # # 4. 전송 준비 완료 → occupy 대상은 원래 primary 채널 (e.g., channel 1의 STA → channel 0 점유)
-        # self.tx_remaining = self.ppdu_duration
-        # self.occupy_request = OccupyRequest(
-        #         channel_id=self.npca_channel.channel_id,  # NPCA 채널 ID
-        #         duration=self.tx_remaining,               # duration
-        #         is_obss=True                              # OBSS 전송
-        #     )
-        # self.next_state = STAState.NPCA_TX
 
     def _handle_npca_frozen(self, slot: int):
         # # OBSS 정보가 더 이상 유효하지 않으면 primary로 복귀
-        # if self.current_obss is None:
-        #     self.next_state = STAState.PRIMARY_BACKOFF
-        #     self.cw_index = 0
-        #     self.backoff = self.generate_backoff()
-        #     return
-
-        # obss_start, obss_dur = self.current_obss[1], self.current_obss[2]
-        # obss_end = obss_start + obss_dur
-
-        # # OBSS duration이 끝나면 primary로 복귀
-        # if slot >= obss_end:
-        #     self.next_state = STAState.PRIMARY_BACKOFF
-        #     self.cw_index = 0
-        #     self.backoff = self.generate_backoff()
-        #     self.current_obss = None
-        #     return
-
-        # # NPCA 채널이 idle → backoff 재개
-        # if not self.npca_channel.is_busy_by_intra_bss(slot):
-        #     self.next_state = STAState.NPCA_BACKOFF
         if self.primary_channel.obss_remain == 0:
             self.cw_index = 0
             self.backoff = self.generate_backoff()
@@ -354,14 +344,6 @@ class STA:
 
 
     def _handle_npca_tx(self, slot: int):
-        # 전송 시작 시 OBSS 점유 요청 (딱 한 번)
-        # if self.tx_remaining == self.ppdu_duration:
-        #     self.occupy_request = OccupyRequest(
-        #         channel_id=self.npca_channel.channel_id,  # NPCA 채널 ID
-        #         duration=self.tx_remaining,               # duration
-        #         is_obss=True                              # OBSS 전송
-        #     )
-
         if self.tx_remaining > 0:
             self.tx_remaining -= 1
             return
@@ -376,7 +358,45 @@ class STA:
             # OBSS가 남아있으면,
             else:
                 self.next_state = STAState.NPCA_BACKOFF
+            self._end_option()
             return
+        
+    def _begin_option(self, s_dict, a_int):
+        assert not self._opt_active, "Option already active"
+        self._opt_active = True
+        self._opt_s = s_dict
+        self._opt_a = int(a_int)
+        self._opt_R = 0.0
+        self._opt_tau = 0
+
+    def _accum_option_reward(self, r):
+        if self._opt_active:
+            self._opt_R += float(r)
+            self._opt_tau += 1
+
+    def _end_option(self):
+        """옵션 종료: (s,a,R,τ)를 pending에 저장. s'는 다음 결정 시 붙임."""
+        if self._opt_active:
+            self._pending = (self._opt_s, self._opt_a, self._opt_R, self._opt_tau)
+            self._opt_active = False
+            self._opt_s = None
+            self._opt_a = None
+            self._opt_R = 0.0
+            self._opt_tau = 0
+
+    def _finalize_pending_with_next_state(self, next_s_dict_vec, memory, done: bool, normalize=True, device=None):
+        """
+        다음 '결정 시점'에서 호출.
+        pending 있으면 s'로 next_s_dict_vec를 채워 replay buffer에 push.
+        """
+        if self._pending is None:
+            return
+        s_dict, a, R, tau = self._pending
+        s_vec  = self.obs_to_vec(s_dict, normalize=normalize)
+        s_vec  = torch.tensor(s_vec, dtype=torch.float32, device=device)
+        s_next = torch.tensor(next_s_dict_vec, dtype=torch.float32, device=device)
+        memory.push(s_vec, a, s_next, R, tau, done)  # (state, action, next_state, cum_reward, tau, done)
+        self._pending = None
 
 
 class Simulator:
@@ -437,10 +457,23 @@ class Simulator:
 
             # ⑧ 상태 전이 및 초기화
             for sta in self.stas:
+                sta._accum_option_reward(0)
                 sta.state = sta.next_state
 
             # ⑨ 로그 저장
             self.log_slot(slot)
+
+        for sta in self.stas:
+            # 옵션이 살아있다면 종료 -> pending으로 전환
+            if sta._opt_active:
+                sta._end_option()
+            # pending이 있으면 done=True로 push
+            if sta._pending is not None:
+                s_dict, a, R, tau = sta._pending
+                s_vec = torch.tensor(sta.obs_to_vec(s_dict, normalize=True), dtype=torch.float32, device=self.device)
+                dummy_next = torch.zeros_like(s_vec)
+                self.memory.push(s_vec, a, dummy_next, R, tau, True)  # done=True
+                sta._pending = None
 
     def log_slot(self, slot: int):
         row = {
@@ -458,21 +491,9 @@ class Simulator:
             row[f"channel_{ch_id}_occupied_remained"] = ch.occupied_remain
             row[f"channel_{ch_id}_obss_occupied_remained"] = ch.obss_remain
             
-            # # OBSS 점유 시간
-            # obss_remain = 0
-            # for _, start, dur, _ in ch.obss_traffic:
-            #     if start <= slot < start + dur:
-            #         obss_remain = start + dur - slot
-            #         break
-
-            # # intra-BSS 점유 시간
-            # occupied_remain = ch.intra_end_slot - slot if ch.intra_occupied else 0
-
-            # row[f"channel_{ch_id}_occupied_remained"] = occupied_remain
-            # row[f"channel_{ch_id}_obss_occupied_remained"] = obss_remain
-
         self.log.append(row)
 
     def get_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.log)
 
+    

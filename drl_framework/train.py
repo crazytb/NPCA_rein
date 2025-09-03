@@ -5,9 +5,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from itertools import count
+from collections import namedtuple
 
-from drl_framework.network import ReplayMemory, DQN, Transition
+from drl_framework.network import ReplayMemory, DQN
 from drl_framework.params import *
+
+Transition = namedtuple('Transition',
+                        ('state', 'action', 'next_state', 'cum_reward', 'tau', 'done'))
 
 def select_action(state, policy_net, env, steps_done, device):
     """Epsilon-greedy action selection"""
@@ -26,26 +30,42 @@ def optimize_model(policy_net, target_net, memory, optimizer, device):
     transitions = memory.sample(BATCH_SIZE)
     batch = Transition(*zip(*transitions))
 
-    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)),
-                                  device=device, dtype=torch.bool)
-    non_final_next_states = torch.cat([s for s in batch.next_state if s is not None])
-    state_batch = torch.cat(batch.state)
-    action_batch = torch.cat(batch.action)
-    reward_batch = torch.cat(batch.reward)
+    # non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)),
+    #                               device=device, dtype=torch.bool)
+    # non_final_next_states = torch.cat([s for s in batch.next_state if s is not None])
+    state_batch  = torch.stack(batch.state).to(device)                # [B, obs_dim]
+    action_batch = torch.tensor(batch.action, device=device).long().unsqueeze(1)
+    R_batch      = torch.tensor(batch.cum_reward, device=device).float()  # 옵션 누적 보상
+    tau_batch    = torch.tensor(batch.tau, device=device).float()         # 옵션 길이(슬롯 수)
+    done_batch   = torch.tensor(batch.done, device=device).float()         # 1.0 if done else 0.0
 
     # Q(s_t, a)
-    state_action_values = policy_net(state_batch).gather(1, action_batch)
+    # state_action_values = policy_net(state_batch).gather(1, action_batch)
+    q_sa = policy_net(state_batch).gather(1, action_batch).squeeze(1)
 
-    # V(s_{t+1})
-    next_state_values = torch.zeros(BATCH_SIZE, device=device)
+    # # V(s_{t+1})
+    # next_state_values = torch.zeros(BATCH_SIZE, device=device)
+    # with torch.no_grad():
+    #     next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0]
+
+    # expected_state_action_values = (next_state_values * GAMMA) + reward_batch
+    # max_a' Q_target(s', a') for non-terminal only
+    non_final_mask = (done_batch == 0)
+    non_final_next_states = torch.stack(
+        [s for s, d in zip(batch.next_state, batch.done) if not d]
+    ).to(device)
+
+    next_state_values = torch.zeros(len(state_batch), device=device)
     with torch.no_grad():
-        next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0]
-
-    expected_state_action_values = (next_state_values * GAMMA) + reward_batch
+        if non_final_next_states.numel() > 0:
+            # (DDQN 원하면 여기서 policy_net.argmax로 a' 뽑아 target_net.gather 사용)
+            next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0]
 
     # Loss
-    criterion = nn.SmoothL1Loss()
-    loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+    # criterion = nn.SmoothL1Loss()
+    # loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+    td_target = R_batch + (GAMMA ** tau_batch) * next_state_values * (1.0 - done_batch)
+    loss = F.smooth_l1_loss(q_sa, td_target)
 
     optimizer.zero_grad()
     loss.backward()

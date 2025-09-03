@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import math
 
 Transition = namedtuple('Transition',
-                        ('state', 'action', 'next_state', 'reward'))
+                        ('state', 'action', 'next_state', 'cum_reward', 'tau', 'done'))
 
 class ReplayMemory():
     def __init__(self, capacity):
