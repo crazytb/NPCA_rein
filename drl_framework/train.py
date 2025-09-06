@@ -58,17 +58,21 @@ class SemiMDPLearner:
 
         # max_a' Q_target(s', a') for non-terminal only
         non_final_mask = (done_batch == 0)
-        non_final_next_states = torch.stack(
-            [s for s, d in zip(batch.next_state, batch.done) if not d]
-        ).to(self.device)
-
+        
         next_state_values = torch.zeros(len(state_batch), device=self.device)
-        with torch.no_grad():
-            if non_final_next_states.numel() > 0:
-                next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0]
+        if non_final_mask.sum() > 0:  # non-terminal states가 있는 경우에만 처리
+            non_final_next_states = torch.stack(
+                [s for s, d in zip(batch.next_state, batch.done) if not d]
+            ).to(self.device)
+            
+            with torch.no_grad():
+                if non_final_next_states.numel() > 0:
+                    next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0]
 
         # Semi-MDP TD Target: R + γ^τ * V(s') for non-terminal states
-        td_target = R_batch + (GAMMA ** tau_batch) * next_state_values * (1.0 - done_batch)
+        # tau 클리핑으로 극도로 작은 할인 인수 방지
+        tau_clipped = torch.clamp(tau_batch, max=20.0)  # 최대 20 슬롯으로 제한
+        td_target = R_batch + (GAMMA ** tau_clipped) * next_state_values * (1.0 - done_batch)
         loss = F.smooth_l1_loss(q_sa, td_target)
 
         # Optimize
@@ -249,22 +253,41 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
         simulator.device = device
         simulator.run()
         
-        # 에피소드별 통계 수집
+        # 에피소드별 총 보상 수집 - episode_reward 사용
         total_reward = 0
         for sta in stas:
+            if sta.npca_enabled:  # NPCA 가능한 STA만 보상 수집
+                total_reward += sta.episode_reward
+                
+            # 에피소드 종료 시 남은 옵션들 정리
+            if sta._opt_active:
+                sta._end_option()
+                
+            # pending 옵션들을 done=True로 finalize 
             if sta._pending:
-                total_reward += sta._pending[2]  # cumulative reward
+                final_obs = sta.get_obs()
+                final_obs_vec = sta.obs_to_vec(final_obs, normalize=True)
+                sta._finalize_pending_with_next_state(
+                    next_obs_vec=final_obs_vec,
+                    memory=learner.memory,
+                    done=True,  # 에피소드 종료
+                    device=learner.device
+                )
+                
+            # 에피소드 보상 초기화
+            sta.episode_reward = 0.0
         episode_rewards.append(total_reward)
         
-        # 학습 수행
+        # 학습 수행 - 빈도 조절
         if len(learner.memory) >= BATCH_SIZE:
-            for _ in range(5):  # 에피소드당 5번 학습
-                loss = learner.optimize_model()
-                if loss is not None:
-                    episode_losses.append(loss)
+            # 에피소드당 1번만 학습으로 안정성 향상
+            loss = learner.optimize_model()
+            if loss is not None:
+                episode_losses.append(loss)
             
-            # Target network 업데이트
-            learner.update_target_network()
+            # Target network를 10 에피소드마다 업데이트
+            if episode % 10 == 0:
+                learner.update_target_network()
         
         # 진행 상황 출력
         if episode % 10 == 0:

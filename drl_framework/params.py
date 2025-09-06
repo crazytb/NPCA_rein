@@ -19,4 +19,4 @@ EPS_START = 0.9
 EPS_END = 0.05
 EPS_DECAY = 1000
 TAU = 0.005
-LR = 1e-4
+LR = 3e-5  # 학습률을 낮춰서 안정성 향상

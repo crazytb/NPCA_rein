@@ -26,39 +26,28 @@ def create_training_config():
         Channel(channel_id=1, obss_generation_rate=0.05, obss_duration_range=(20, 40))  # Secondary channel with OBSS
     ]
     
-    # STA 설정
-    stas_config = [
-        # Channel 1의 STA들 (NPCA 지원)
-        {
-            "sta_id": 0,
+    # STA 설정 - 각 채널에 10개씩 STA 배치
+    stas_config = []
+    
+    # Channel 1의 STA들 (NPCA 지원) - 10개
+    for i in range(10):
+        stas_config.append({
+            "sta_id": i,
             "channel_id": 1,
             "npca_enabled": True,
             "ppdu_duration": 33,
             "radio_transition_time": 1
-        },
-        {
-            "sta_id": 1, 
-            "channel_id": 1,
-            "npca_enabled": True,
-            "ppdu_duration": 33,
-            "radio_transition_time": 1
-        },
-        # Channel 0의 STA들 (기존 방식)
-        {
-            "sta_id": 2,
+        })
+    
+    # Channel 0의 STA들 (기존 방식) - 10개
+    for i in range(10, 20):
+        stas_config.append({
+            "sta_id": i,
             "channel_id": 0, 
             "npca_enabled": False,
             "ppdu_duration": 33,
             "radio_transition_time": 1
-        },
-        {
-            "sta_id": 3,
-            "channel_id": 0,
-            "npca_enabled": False, 
-            "ppdu_duration": 33,
-            "radio_transition_time": 1
-        }
-    ]
+        })
     
     return channels, stas_config
 
@@ -100,8 +89,8 @@ def main():
     # 설정 생성
     channels, stas_config = create_training_config()
     
-    # 학습 파라미터
-    num_episodes = 10000
+    # 학습 파라미터 - 높은 STA 밀도로 인한 복잡성 증가로 더 많은 학습 필요
+    num_episodes = 3000  # STA 수 증가로 조정
     num_slots_per_episode = 100
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     

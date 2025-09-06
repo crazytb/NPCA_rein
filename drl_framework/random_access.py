@@ -167,6 +167,7 @@ class STA:
         self._opt_R = 0.0           # 누적 보상 (슬롯 합산)
         self._opt_tau = 0           # 옵션 sojourn length (슬롯 수)
         self._pending = None        # (s_dict, a, cum_R, tau) — 다음 결정 때 s' 채워 push
+        self.episode_reward = 0.0   # 에피소드별 누적 보상 추적
 
     def generate_backoff(self) -> int:
         cw = CONTENTION_WINDOW[self.cw_index]
@@ -221,17 +222,22 @@ class STA:
         return x
     
     def calculate_reward(self, slot: int) -> float:
-        """전송 완료 시 PPDU 길이만큼 보상"""
+        """전송 완료 시 정규화된 보상"""
         reward = 0.0
         
         # 전송 완료 시에만 보상 지급
         if self.tx_remaining == 0 and (self.state == STAState.PRIMARY_TX or self.state == STAState.NPCA_TX):
             if hasattr(self, 'tx_success') and self.tx_success:
-                reward = float(self.ppdu_duration)  # 성공한 PPDU 길이만큼 보상
+                # 보상을 정규화: PPDU 길이를 100으로 나누어 0-1 범위로 조정
+                reward = float(self.ppdu_duration) / 100.0
         
         return reward
 
     def step(self, slot: int):
+        # 옵션이 활성화되어 있으면 tau 증가
+        if self._opt_active:
+            self._opt_tau += 1
+            
         if self.state == STAState.PRIMARY_BACKOFF:
             self._handle_primary_backoff(slot)
         elif self.state == STAState.PRIMARY_FROZEN:
@@ -272,17 +278,21 @@ class STA:
                     action = self.learner.select_action(state_tensor)
                     self.learner.steps_done += 1
 
+                    
                     # 옵션 시작 (이번 (s,a) 기록)
                     self._begin_option(obs_dict, int(action))
 
                     # 기존 분기 유지
                     self.current_obss = self.primary_channel.get_latest_obss(slot)
-                    self.cw_index = 0
-                    self.backoff = self.generate_backoff()
-
+                    
                     if action == 0:
+                        # Stay Primary: CW 유지, backoff만 새로 생성
+                        self.backoff = self.generate_backoff()
                         self.next_state = STAState.PRIMARY_FROZEN
                     else:
+                        # Go NPCA: CW 리셋하고 새 backoff 생성
+                        self.cw_index = 0
+                        self.backoff = self.generate_backoff()
                         if self.npca_channel.is_busy_by_intra_bss(slot):
                             self.next_state = STAState.NPCA_FROZEN
                         # NPCA 채널이 busy하지 않으면 backoff
@@ -330,9 +340,16 @@ class STA:
 
         # 전송 종료 후
         if self.tx_remaining == 0:
-            # self.next_state = STAState.PRIMARY_BACKOFF
-            # self.backoff = self.generate_backoff()
-            # self.cw_index = 0
+            # 보상 계산 및 누적
+            reward = self.calculate_reward(slot)
+            if reward > 0:
+                self.episode_reward += reward  # 에피소드 누적 보상에 항상 추가
+                if self._opt_active:
+                    self._opt_R += reward
+                    pass  # PRIMARY TX completed with active option
+                else:
+                    pass  # PRIMARY TX completed without active option
+                
             if self.tx_success:
                 self.handle_success()  # 전송 성공 처리
             else:
@@ -374,9 +391,22 @@ class STA:
             return
 
         if self.tx_remaining == 0:
+            # NPCA 전송은 항상 성공으로 간주 (OBSS 간섭 없음)
+            self.tx_success = True
+            
+            # 보상 계산 및 누적
+            reward = self.calculate_reward(slot)
+            if reward > 0:
+                self.episode_reward += reward  # 에피소드 누적 보상에 항상 추가
+                if self._opt_active:
+                    self._opt_R += reward
+                    pass  # NPCA TX completed with active option
+                else:
+                    pass  # NPCA TX completed without active option
+                
             self.current_obss = None  # 전송 종료 → cleanup
-            self.cw_index = 0
-            self.backoff = self.generate_backoff()
+            self.handle_success()  # 전송 성공 처리
+            
             # If OBSS가 남아있지 않으면,
             if self.primary_channel.obss_remain == 0:
                 self.next_state = STAState.PRIMARY_BACKOFF
