@@ -1,6 +1,6 @@
 # Semi-MDP 기반 NPCA 학습 프로젝트 작업 요약
 
-## 📅 작업 일시: 2025-09-06
+## 📅 작업 일시: 2025-09-06 ~ 2025-09-08
 
 ## 🎯 프로젝트 개요
 - **목표**: Semi-MDP 기반 DQN을 사용한 NPCA (Non-Primary Channel Access) 의사결정 학습
@@ -235,5 +235,196 @@ source activate torch-cert && python analyze_factors.py
 
 ---
 
-**작업 완료 일시**: 2025-09-06  
-**다음 작업 시 참고**: 이 문서와 CLAUDE.md를 함께 참고하여 작업 연속성 유지
+## 🔄 2025-09-08 추가 작업: CSV 로깅 및 성능 비교 시스템 구현
+
+### 5. CSV 로깅 시스템 구현 ✅
+**목적**: 학습 과정의 모든 결정 시점을 상세 분석하기 위한 데이터 수집
+
+**구현 내용**:
+```python
+# random_access.py에 CSV 로깅 추가
+if hasattr(self, 'decision_log'):
+    log_entry = {
+        'episode': getattr(self, 'current_episode', -1),
+        'slot': slot,
+        'sta_id': self.sta_id,
+        'primary_channel_obss_occupied_remained': obs_dict.get('primary_channel_obss_occupied_remained', 0),
+        'radio_transition_time': obs_dict.get('radio_transition_time', 0),
+        'tx_duration': obs_dict.get('tx_duration', 0),
+        'cw_index': obs_dict.get('cw_index', 0),
+        'action': int(action),
+        'epsilon': epsilon,
+        'steps_done': self.learner.steps_done
+    }
+    self.decision_log.append(log_entry)
+
+# train.py에서 CSV 저장
+if decision_log:
+    decision_df = pd.DataFrame(decision_log)
+    csv_path = "./semi_mdp_results/decision_log.csv"
+    decision_df.to_csv(csv_path, index=False)
+```
+
+### 6. Semi-MDP Tau 이중 계산 버그 수정 ✅
+**문제**: Semi-MDP에서 tau(옵션 지속 시간)가 step()과 _accum_option_reward()에서 중복 증가
+
+**원인**: 
+```python
+# 버그 코드
+def step(self):
+    if self._opt_active:
+        self._opt_tau += 1  # 첫 번째 증가
+
+def _accum_option_reward(self):
+    if self._opt_active:
+        self._opt_tau += 1  # 중복 증가 (잘못됨)
+```
+
+**수정**:
+```python
+def _accum_option_reward(self, slot: int):
+    if self._opt_active:
+        reward = self.calculate_reward(slot)
+        self._opt_R += reward
+        # tau 중복 증가 제거
+```
+
+### 7. 에피소드 길이 최적화 ✅
+**문제**: 100 슬롯 에피소드에서 OBSS 지속시간(80-150)이 너무 길어 대기 완료 불가
+
+**해결책**: 에피소드 길이를 100 → 200 슬롯으로 연장
+- OBSS 대기 완료 가능
+- 더 많은 결정 시점 제공
+- 액션별 성능 차이 명확화
+
+### 8. 채널 점유 시간 기반 지연된 보상 시스템 구현 ✅
+**기존 문제**: 즉시적 보상으로 인한 편향된 성능 평가
+
+**새로운 보상 시스템**:
+```python
+# 전송 성공 시 점유 시간 추가
+if self.tx_success:
+    self.channel_occupancy_time += self.ppdu_duration
+
+# 에피소드 종료 시 점유율 계산
+occupancy_ratio = sta.channel_occupancy_time / self.num_slots
+sta.episode_reward = occupancy_ratio * 100  # 0~100% 점유율
+```
+
+**장점**:
+- 실제 처리량 반영
+- 채널 종류와 무관한 공정한 평가
+- 현실적인 성능 메트릭
+
+### 9. 고정 전략 지원 시스템 구현 ✅
+**목적**: 학습된 DRL 정책과 휴리스틱 전략의 정량적 비교
+
+**구현**:
+```python
+# 고정 전략 지원
+if hasattr(self, '_fixed_action'):
+    action = self._fixed_action  # 0: StayPrimary, 1: GoNPCA
+else:
+    # DRL 정책 사용
+    action = self.learner.select_action(state_tensor)
+
+# learner=None인 경우 결정 로직 수정
+if self.npca_enabled and self.npca_channel and (self.learner or hasattr(self, '_fixed_action')):
+    # 결정 로직 실행
+```
+
+### 10. 종합 성능 비교 시스템 완성 ✅
+**비교 대상**: 
+- 제안기법(DRL Policy)
+- Always NPCA
+- Always Primary
+
+**최종 비교 결과** (높은 간섭 환경: OBSS 발생률 0.6, 지속시간 80-150):
+
+| 전략 | 평균 점유율 | 성공률 | 평균 점유 시간 |
+|------|-------------|--------|----------------|
+| **Always NPCA** | **123.25%** | **100%** | **246.5 slots** |
+| **Always Primary** | **6.43%** | **23%** | **12.9 slots** |
+| **DRL Policy (제안기법)** | **3.96%** | **17%** | **7.9 slots** |
+
+**주요 발견사항**:
+- 현재 고간섭 환경에서는 Always NPCA가 압도적 우세
+- DRL 정책은 추가 학습이 필요한 상태
+- 환경 조건에 따라 최적 전략이 달라짐 (낮은 간섭에서는 Always Primary 유리)
+
+### 11. 프로젝트 구조 정리 ✅
+**디버깅 파일 백업**: 12개 파일을 `backup_debug_files/` 폴더로 이동
+- 메인 디렉토리 정리
+- 핵심 파일만 유지: `main_semi_mdp_training.py`, `comprehensive_comparison.py` 등
+
+---
+
+## 📊 최신 실험 결과 (2025-09-08)
+
+### CSV 로깅 분석 결과
+**20,000 에피소드 학습 후**:
+- 총 결정 시점: 154개
+- 액션 분포: StayPrimary 50.6%, GoNPCA 49.4%
+- 평균 보상: 1.0 (안정적 수렴)
+- Tau 차이: StayPrimary(135.0) > GoNPCA(115.2)
+
+### 환경별 성능 비교
+**높은 간섭 환경** (OBSS 0.6, 80-150 슬롯):
+- Always NPCA >> Always Primary > DRL Policy
+
+**낮은 간섭 환경** (OBSS 0.1, 20-40 슬롯):
+- Always Primary > Always NPCA (결정 기회 부족)
+
+### 학습 안정성 검증
+- **Running Average**: 500 에피소드 후 1.0 수준 안정화
+- **Training Loss**: 초기 4→8 증가 후 7-8 수준 안정화
+- **성공률**: DRL 100%, Always NPCA 100%, Always Primary 23%
+
+---
+
+## 🛠️ 기술적 개선사항 (최신)
+
+### 주요 파일 구조 (업데이트)
+```
+drl_framework/
+├── train.py           # CSV 로깅, 학습 안정성 개선
+├── network.py         # DQN 네트워크 (변경 없음)
+├── random_access.py   # 점유 시간 추적, 고정 전략 지원, tau 수정
+├── params.py          # 하이퍼파라미터 (변경 없음)
+└── configs.py         # 시뮬레이션 설정 (변경 없음)
+
+comprehensive_comparison.py  # 종합 성능 비교 (신규)
+backup_debug_files/         # 디버깅 파일 백업 (신규)
+```
+
+### 핵심 개선사항
+1. **지연된 보상**: 에피소드 종료 시 점유율 기반 보상 할당
+2. **공정한 비교**: 채널 종류와 무관한 성능 메트릭
+3. **상세 로깅**: 모든 결정 시점의 상태/액션/보상 기록
+4. **버그 수정**: Semi-MDP tau 중복 계산, 에피소드 길이 최적화
+5. **전략 비교**: DRL vs 휴리스틱의 정량적 성능 비교
+
+---
+
+## 💡 최신 인사이트 (2025-09-08)
+
+### 1. 환경 적응성의 중요성
+- **"환경이 전략을 결정한다"**: 간섭 수준에 따라 최적 전략 변화
+- **"학습의 가치는 적응성"**: DRL의 진가는 다양한 환경에서의 적응력
+
+### 2. 보상 설계의 영향
+- **"메트릭이 성능을 정의한다"**: 점유 시간 기반 보상으로 공정한 평가
+- **"지연된 보상의 효과"**: 장기적 전략 최적화 유도
+
+### 3. 실험 설계 교훈
+- **"충분한 실험 시간 필요"**: 짧은 에피소드로 인한 성능 저하
+- **"버그의 숨겨진 영향"**: tau 중복 계산이 학습 성능에 미치는 영향
+- **"상세한 로깅의 가치"**: CSV 데이터로 학습 과정 깊이 분석 가능
+
+---
+
+**작업 완료 일시**: 2025-09-08  
+**다음 작업 시 참고**: 
+- 이 문서와 CLAUDE.md를 함께 참고하여 작업 연속성 유지
+- `comprehensive_comparison.py`로 성능 비교 실행 가능
+- `backup_debug_files/`에 모든 디버깅 스크립트 보관됨

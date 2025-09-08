@@ -1,0 +1,4 @@
+Strategy,Mean_Reward_%,Std_Reward_%,Mean_Occupancy_slots,Success_Rate_%,Episodes
+DRL Policy (제안기법),3.96,9.65496763329634,7.92,17.0,100
+Always NPCA,123.255,34.88140586329628,246.51,100.0,100
+Always Primary,6.435,13.585222670239895,12.87,23.0,100

@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import pandas as pd
+import os
 from itertools import count
 from collections import namedtuple
 
@@ -219,6 +221,9 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
     episode_rewards = []
     episode_losses = []
     
+    # CSV 로깅을 위한 리스트들
+    decision_log = []  # 모든 결정 시점 기록
+    
     print(f"Starting Semi-MDP training on {device}")
     print(f"Episodes: {num_episodes}, Slots per episode: {num_slots_per_episode}")
     
@@ -245,6 +250,12 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
                 ppdu_duration=config.get("ppdu_duration", 33),
                 learner=learner if config.get("npca_enabled", False) else None
             )
+            
+            # CSV 로깅을 위한 설정 (NPCA enabled STA만)
+            if config.get("npca_enabled", False):
+                sta.decision_log = decision_log
+                sta.current_episode = episode
+            
             stas.append(sta)
         
         # 시뮬레이터 실행
@@ -271,23 +282,27 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
                     next_obs_vec=final_obs_vec,
                     memory=learner.memory,
                     done=True,  # 에피소드 종료
-                    device=learner.device
+                    device=learner.device,
+                    num_slots_per_episode=num_slots_per_episode
                 )
                 
             # 에피소드 보상 초기화
             sta.episode_reward = 0.0
-        episode_rewards.append(total_reward)
         
-        # 학습 수행 - 빈도 조절
+        # 보상을 num_slots_per_episode로 정규화 (에피소드당 슬롯 효율성)
+        normalized_reward = total_reward / num_slots_per_episode
+        episode_rewards.append(normalized_reward)
+        
+        # 학습 수행 - 빈도 증가로 학습 속도 개선
         if len(learner.memory) >= BATCH_SIZE:
-            # 에피소드당 1번만 학습으로 안정성 향상
-            loss = learner.optimize_model()
-            if loss is not None:
-                episode_losses.append(loss)
+            # 에피소드당 3번 학습으로 학습 속도 향상
+            for _ in range(3):
+                loss = learner.optimize_model()
+                if loss is not None:
+                    episode_losses.append(loss)
             
-            # Target network를 10 에피소드마다 업데이트
-            if episode % 10 == 0:
-                learner.update_target_network()
+            # Target network를 매 에피소드마다 업데이트 (빈도 증가)
+            learner.update_target_network()
         
         # 진행 상황 출력
         if episode % 10 == 0:
@@ -299,4 +314,14 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
                   f"Memory Size = {len(learner.memory)}")
     
     print("Training completed!")
+    
+    # CSV 파일로 결정 로그 저장
+    if decision_log:
+        decision_df = pd.DataFrame(decision_log)
+        os.makedirs("./semi_mdp_results", exist_ok=True)
+        csv_path = "./semi_mdp_results/decision_log.csv"
+        decision_df.to_csv(csv_path, index=False)
+        print(f"Decision log saved to {csv_path}")
+        print(f"Total decision points logged: {len(decision_log)}")
+    
     return episode_rewards, episode_losses, learner
