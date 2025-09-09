@@ -227,16 +227,10 @@ class STA:
         return x
     
     def calculate_reward(self, slot: int) -> float:
-        """전송 완료 시 정규화된 보상"""
-        reward = 0.0
-        
-        # 전송 완료 시에만 보상 지급
-        if self.tx_remaining == 0 and (self.state == STAState.PRIMARY_TX or self.state == STAState.NPCA_TX):
-            if hasattr(self, 'tx_success') and self.tx_success:
-                # 보상을 정규화: PPDU 길이를 100으로 나누어 0-1 범위로 조정
-                reward = float(self.ppdu_duration)
-        
-        return reward
+        """지연된 보상 구조: 에피소드 종료 시에만 보상 계산"""
+        # 즉시 보상 제거: 모든 슬롯에서 0 반환
+        # 실제 보상은 에피소드 종료 시 channel_occupancy_time으로 계산
+        return 0.0
 
     def step(self, slot: int):
         # 옵션이 활성화되어 있으면 tau 증가
@@ -436,13 +430,14 @@ class STA:
             return
 
         if self.tx_remaining == 0:
-            # NPCA 전송은 항상 성공으로 간주 (OBSS 간섭 없음)
-            self.tx_success = True
+            # NPCA 전송 성공 여부는 시뮬레이터에서 collision detection을 통해 결정됨
+            # tx_success는 시뮬레이터의 collision detection 결과에 따라 설정됨
             
-            # 성공한 전송의 경우 점유 시간 추가
-            self.channel_occupancy_time += self.ppdu_duration  # 전체 전송 시간을 한번에 추가
+            # 성공한 전송의 경우만 점유 시간 추가
+            if hasattr(self, 'tx_success') and self.tx_success:
+                self.channel_occupancy_time += self.ppdu_duration  # 전체 전송 시간을 한번에 추가
             
-            # 보상 계산 및 누적
+            # 보상 계산 및 누적 (지연된 보상으로 0 반환하도록 수정됨)
             reward = self.calculate_reward(slot)
             if reward > 0:
                 self.episode_reward += reward  # 에피소드 누적 보상에 항상 추가
@@ -453,7 +448,12 @@ class STA:
                     pass  # NPCA TX completed without active option
                 
             self.current_obss = None  # 전송 종료 → cleanup
-            self.handle_success()  # 전송 성공 처리
+            
+            # NPCA 전송도 collision 가능성 고려
+            if hasattr(self, 'tx_success') and self.tx_success:
+                self.handle_success()  # 전송 성공 처리
+            else:
+                self.handle_collision()  # 전송 실패 처리
             
             # If OBSS가 남아있지 않으면,
             if self.primary_channel.obss_remain == 0:
@@ -528,7 +528,8 @@ class STA:
         
         # 옵션 보상도 num_slots_per_episode로 정규화
         normalized_R = R / num_slots_per_episode
-        memory.push(s_vec, a, s_next, normalized_R, tau, done)  # (state, action, next_state, cum_reward, tau, done)
+        if memory is not None:
+            memory.push(s_vec, a, s_next, normalized_R, tau, done)  # (state, action, next_state, cum_reward, tau, done)
         self._pending = None
 
 
@@ -601,11 +602,8 @@ class Simulator:
             # 총 에피소드 슬롯 수 기록
             sta.total_episode_slots = self.num_slots
             
-            # 점유율 계산 (0~1 범위)
-            occupancy_ratio = sta.channel_occupancy_time / self.num_slots if self.num_slots > 0 else 0.0
-            
-            # 기존 episode_reward를 점유율로 대체
-            sta.episode_reward = occupancy_ratio * 100  # 0~100 범위로 스케일링
+            # 새로운 보상 구조: 성공적으로 전송한 슬롯 수 그대로 사용
+            sta.episode_reward = float(sta.channel_occupancy_time)  # 성공 전송 슬롯 수
         
         for sta in self.stas:
             # 옵션이 살아있다면 종료 -> pending으로 전환
@@ -616,9 +614,10 @@ class Simulator:
                 s_dict, a, _, tau = sta._pending  # R은 사용하지 않음 (지연된 보상)
                 s_vec = torch.tensor(sta.obs_to_vec(s_dict, normalize=True), dtype=torch.float32, device=self.device)
                 dummy_next = torch.zeros_like(s_vec)
-                # 점유율 기반 보상을 사용
-                occupancy_reward = sta.episode_reward / 100  # 0~1 범위로 정규화
-                self.memory.push(s_vec, a, dummy_next, occupancy_reward, tau, True)  # done=True
+                # 성공 전송 슬롯 수 기반 보상을 사용 (정규화 필요시 에피소드 길이로 나누기)
+                slot_reward = sta.episode_reward / self.num_slots  # 0~1 범위로 정규화
+                if self.memory is not None:
+                    self.memory.push(s_vec, a, dummy_next, slot_reward, tau, True)  # done=True
                 sta._pending = None
 
     def log_slot(self, slot: int):

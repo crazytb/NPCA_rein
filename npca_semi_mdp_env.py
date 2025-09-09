@@ -158,10 +158,12 @@ class NPCASemiMDPEnv(gym.Env):
         
         sta.state = sta.next_state
         
-        # Simulate until next decision point
-        cumulative_reward = 0
+        # Simulate until next decision point - 지연된 보상으로 수정
+        cumulative_reward = 0  # 슬롯별 보상 대신 옵션 종료 시 보상 계산
         duration = 0
-        gamma_per_slot = 0.99
+        
+        # 옵션 시작 시점의 channel_occupancy_time 기록
+        initial_occupancy = sta.channel_occupancy_time
         
         while (self.current_slot < self.num_slots and 
                duration < 500 and  # Max duration limit
@@ -178,12 +180,12 @@ class NPCASemiMDPEnv(gym.Env):
                 s.step(self.current_slot)
                 s.state = s.next_state
             
-            # Calculate slot reward
-            slot_reward = self._calculate_slot_reward(sta)
-            cumulative_reward += slot_reward * (gamma_per_slot ** duration)
-            
             self.current_slot += 1
             duration += 1
+        
+        # 옵션 종료 시 보상 계산: 옵션 기간 동안 성공적으로 전송한 슬롯 수
+        option_successful_slots = sta.channel_occupancy_time - initial_occupancy
+        cumulative_reward = float(option_successful_slots)  # 성공 전송 슬롯 수를 보상으로 사용
         
         # Check if episode is done
         done = (self.current_slot >= self.num_slots)
@@ -203,25 +205,10 @@ class NPCASemiMDPEnv(gym.Env):
         return next_obs, cumulative_reward, done, False, info
     
     def _calculate_slot_reward(self, sta: STA) -> float:
-        """Calculate reward for current slot"""
-        reward = 0.0
-        
-        # Reward for successful transmission
-        if hasattr(sta, 'tx_success') and sta.tx_success:
-            if sta.state == STAState.PRIMARY_TX:
-                reward += 10.0  # Higher reward for primary transmission
-            elif sta.state == STAState.NPCA_TX:
-                reward += 8.0   # Slightly lower for NPCA transmission
-        
-        # Small penalty for waiting (encourages efficiency)
-        if sta.state in [STAState.PRIMARY_FROZEN, STAState.NPCA_FROZEN]:
-            reward -= 0.1
-        
-        # Penalty for backoff (encourages finding opportunities)
-        if sta.state in [STAState.PRIMARY_BACKOFF, STAState.NPCA_BACKOFF]:
-            reward -= 0.05
-        
-        return reward
+        """지연된 보상 구조: 슬롯별 즉시 보상 제거"""
+        # 슬롯별 즉시 보상 제거 - 모든 보상은 에피소드 종료 시에만 계산
+        # 실제 보상은 에피소드 종료 시 성공적으로 전송한 슬롯 수로 계산됨
+        return 0.0
     
     def render(self, mode='human'):
         """Render current state (optional)"""
