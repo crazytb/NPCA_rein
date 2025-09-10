@@ -17,7 +17,12 @@ class NPCASemiMDPEnv(gym.Env):
                  num_stas: int = 2,
                  num_slots: int = 1000,
                  obss_generation_rate: float = 0.1,
-                 npca_enabled: bool = True):
+                 npca_enabled: bool = True,
+                 # Throughput + Latency reward weights
+                 throughput_weight: float = 10.0,  # 처리량 보상 강화
+                 latency_penalty_weight: float = 0.1,  # 지연 패널티
+                 # State space enhancement
+                 history_length: int = 10):  # Channel history length
         super().__init__()
         
         self.num_stas = num_stas
@@ -25,10 +30,18 @@ class NPCASemiMDPEnv(gym.Env):
         self.obss_generation_rate = obss_generation_rate
         self.npca_enabled = npca_enabled
         
+        # Reward components
+        self.throughput_weight = throughput_weight
+        self.latency_penalty_weight = latency_penalty_weight
+        
+        # State enhancement
+        self.history_length = history_length
+        self.channel_history = []  # [primary_busy, obss_busy, npca_busy] for last N slots
+        
         # Action Space: 0 = stay in PRIMARY (frozen), 1 = switch to NPCA
         self.action_space = spaces.Discrete(2)
         
-        # Observation Space - 각 STA와 채널의 상태 정보
+        # Enhanced observation space with channel history
         self.observation_space = spaces.Dict({
             'current_slot': spaces.Discrete(num_slots),
             'backoff_counter': spaces.Discrete(1024),  # Max CW
@@ -37,6 +50,13 @@ class NPCASemiMDPEnv(gym.Env):
             'channel_busy_intra': spaces.Discrete(2),  # Boolean
             'channel_busy_obss': spaces.Discrete(2),   # Boolean
             'npca_channel_busy': spaces.Discrete(2),   # Boolean
+            # Channel history features
+            'primary_busy_history': spaces.Box(low=0, high=1, shape=(history_length,), dtype=np.float32),
+            'obss_busy_history': spaces.Box(low=0, high=1, shape=(history_length,), dtype=np.float32),
+            'npca_busy_history': spaces.Box(low=0, high=1, shape=(history_length,), dtype=np.float32),
+            # Aggregate statistics
+            'obss_frequency': spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32),
+            'avg_obss_duration': spaces.Box(low=0, high=100, shape=(1,), dtype=np.float32),
         })
         
         self.reset()
@@ -69,6 +89,10 @@ class NPCASemiMDPEnv(gym.Env):
         self.episode_reward = 0
         self.decision_count = 0
         
+        # Initialize channel history
+        self.channel_history = []
+        self.obss_events = []  # Track OBSS events for statistics
+        
         # Find first decision point
         self._advance_to_next_decision()
         
@@ -82,6 +106,32 @@ class NPCASemiMDPEnv(gym.Env):
         """
         return (sta.state == STAState.PRIMARY_BACKOFF and 
                 sta.primary_channel.is_busy_by_obss(slot))
+    
+    def _update_channel_history(self):
+        """Update channel history with current slot information"""
+        sta = self.decision_sta
+        
+        # Current channel status
+        primary_intra_busy = int(sta.primary_channel.is_busy_by_intra_bss(self.current_slot))
+        obss_busy = int(sta.primary_channel.is_busy_by_obss(self.current_slot))
+        npca_busy = int(sta.npca_channel.is_busy(self.current_slot)) if sta.npca_channel else 0
+        
+        # Add to history
+        self.channel_history.append([primary_intra_busy, obss_busy, npca_busy])
+        
+        # Track OBSS events for statistics
+        if obss_busy and (not self.channel_history or 
+                         len(self.channel_history) < 2 or 
+                         self.channel_history[-2][1] == 0):
+            # New OBSS event started
+            self.obss_events.append({'start': self.current_slot, 'duration': 1})
+        elif obss_busy and len(self.obss_events) > 0:
+            # Continue existing OBSS
+            self.obss_events[-1]['duration'] = self.current_slot - self.obss_events[-1]['start'] + 1
+        
+        # Keep only recent history
+        if len(self.channel_history) > self.history_length:
+            self.channel_history = self.channel_history[-self.history_length:]
     
     def _advance_to_next_decision(self) -> bool:
         """
@@ -100,6 +150,9 @@ class NPCASemiMDPEnv(gym.Env):
                 ch.update(self.current_slot)
                 ch.generate_obss(self.current_slot)
             
+            # Update channel history
+            self._update_channel_history()
+            
             # Update all STAs (passive simulation)
             for sta in self.stas:
                 sta.occupy_request = None
@@ -112,8 +165,29 @@ class NPCASemiMDPEnv(gym.Env):
         return self.current_slot < self.num_slots and advance_count < max_advance
     
     def _get_observation(self) -> Dict:
-        """Get current observation for the decision-making STA"""
+        """Get enhanced observation for the decision-making STA"""
         sta = self.decision_sta
+        
+        # Pad history if not enough data
+        if len(self.channel_history) < self.history_length:
+            padding_size = self.history_length - len(self.channel_history)
+            padded_history = [[0, 0, 0]] * padding_size + self.channel_history
+        else:
+            padded_history = self.channel_history[-self.history_length:]
+        
+        # Extract history arrays
+        primary_history = np.array([h[0] for h in padded_history], dtype=np.float32)
+        obss_history = np.array([h[1] for h in padded_history], dtype=np.float32)
+        npca_history = np.array([h[2] for h in padded_history], dtype=np.float32)
+        
+        # Calculate aggregate statistics
+        total_slots = len(self.channel_history)
+        obss_frequency = np.mean(obss_history) if len(obss_history) > 0 else 0.0
+        
+        if self.obss_events:
+            avg_obss_duration = np.mean([event['duration'] for event in self.obss_events])
+        else:
+            avg_obss_duration = 0.0
         
         return {
             'current_slot': self.current_slot,
@@ -123,6 +197,12 @@ class NPCASemiMDPEnv(gym.Env):
             'channel_busy_intra': int(sta.primary_channel.is_busy_by_intra_bss(self.current_slot)),
             'channel_busy_obss': int(sta.primary_channel.is_busy_by_obss(self.current_slot)),
             'npca_channel_busy': int(sta.npca_channel.is_busy(self.current_slot)) if sta.npca_channel else 0,
+            # Enhanced features
+            'primary_busy_history': primary_history,
+            'obss_busy_history': obss_history,
+            'npca_busy_history': npca_history,
+            'obss_frequency': np.array([obss_frequency], dtype=np.float32),
+            'avg_obss_duration': np.array([avg_obss_duration], dtype=np.float32),
         }
     
     def step(self, action: int) -> Tuple[Dict, float, bool, bool, Dict]:
@@ -158,9 +238,9 @@ class NPCASemiMDPEnv(gym.Env):
         
         sta.state = sta.next_state
         
-        # Simulate until next decision point - 지연된 보상으로 수정
-        cumulative_reward = 0  # 슬롯별 보상 대신 옵션 종료 시 보상 계산
+        # Simulate until next decision point - Throughput + Latency 기반 보상
         duration = 0
+        waiting_slots = 0  # 실제 대기한 슬롯 수 (frozen/backoff 상태)
         
         # 옵션 시작 시점의 channel_occupancy_time 기록
         initial_occupancy = sta.channel_occupancy_time
@@ -174,6 +254,14 @@ class NPCASemiMDPEnv(gym.Env):
                 ch.update(self.current_slot)
                 ch.generate_obss(self.current_slot)
             
+            # Update channel history
+            self._update_channel_history()
+            
+            # Count waiting slots (when STA is not transmitting)
+            if (sta.state in [STAState.PRIMARY_FROZEN, STAState.NPCA_FROZEN, 
+                             STAState.PRIMARY_BACKOFF, STAState.NPCA_BACKOFF]):
+                waiting_slots += 1
+            
             # Update all STAs
             for s in self.stas:
                 s.occupy_request = None
@@ -183,9 +271,19 @@ class NPCASemiMDPEnv(gym.Env):
             self.current_slot += 1
             duration += 1
         
-        # 옵션 종료 시 보상 계산: 옵션 기간 동안 성공적으로 전송한 슬롯 수
-        option_successful_slots = sta.channel_occupancy_time - initial_occupancy
-        cumulative_reward = float(option_successful_slots)  # 성공 전송 슬롯 수를 보상으로 사용
+        # Simplified reward calculation for Semi-MDP
+        successful_transmission_slots = sta.channel_occupancy_time - initial_occupancy
+        
+        # 1. Base throughput reward (전송 성공한 슬롯 수에 비례)
+        throughput_reward = self.throughput_weight * successful_transmission_slots
+        
+        # 2. Latency penalty (전송 성공까지 소요된 총 시간에 비례)
+        # duration = 액션 시작부터 다음 결정점까지의 총 소요 시간
+        # 전송이 실패하면 다음 전송 성공까지 더 오래 걸림
+        latency_penalty = self.latency_penalty_weight * duration
+        
+        # 총 보상 = 처리량 보상 - 지연 패널티
+        cumulative_reward = throughput_reward - latency_penalty
         
         # Check if episode is done
         done = (self.current_slot >= self.num_slots)
@@ -197,7 +295,15 @@ class NPCASemiMDPEnv(gym.Env):
             'duration': duration,
             'start_slot': start_slot,
             'end_slot': self.current_slot,
-            'decision_count': self.decision_count
+            'decision_count': self.decision_count,
+            'successful_transmission_slots': successful_transmission_slots,
+            'waiting_slots': waiting_slots,
+            'transmission_efficiency': successful_transmission_slots / max(duration, 1),
+            'action_taken': "Stay PRIMARY" if action == 0 else "Switch to NPCA",
+            # Simplified reward components
+            'throughput_reward': throughput_reward,
+            'latency_penalty': latency_penalty,
+            'total_reward': cumulative_reward
         }
         
         self.decision_count += 1

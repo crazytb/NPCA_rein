@@ -6,6 +6,7 @@
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{algorithmic}
+\usepackage{algorithm}
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage{xcolor}
@@ -67,62 +68,175 @@ Existing NPCA studies focus primarily on theoretical analysis and static optimiz
 
 \section{System Model and Problem Formulation}
 
-\subsection{NPCA System Model}
+This section presents the formal mathematical framework for the NPCA decision-making problem, establishing the Semi-MDP~\cite{sutton1999between} formulation that enables intelligent channel access learning.
 
-We consider a wireless network with overlapping BSSs where stations operate on a primary channel (Channel 0) and can access a secondary NPCA channel (Channel 1) when OBSS activity is detected. Each station maintains awareness of primary channel occupancy and makes binary decisions: stay on primary (Action 0) or switch to NPCA (Action 1).
+\subsection{Network Architecture and System Model}
 
-\subsection{Semi-MDP Formulation}
+We consider a wireless local area network (WLAN) consisting of two basic service sets (BSSs) operating in the IEEE 802.11bn framework in which Channel 0 with no OBSS interference and Channel 1 with OBSS activity. The stations (STAs) in Channel 1 can opportunistically access the NPCA channel when OBSS activity is detected on the channel.
 
-We formulate the NPCA decision problem as a Semi-MDP with the following components:
+Each STA in Channel 1 operates according to the enhanced distributed channel access (EDCA) mechanism while maintaining NPCA capability. When OBSS activity is detected on its associated channel during the backoff procedure, the STA will make a strategic decision regarding channel access.
 
-\textbf{State Space}: The state $s_t$ includes:
+\subsection{State Space Design}
+
+The state space $\mathcal{S}$ captures the essential environmental information required for intelligent NPCA decision-making. At decision epoch $t$, the system state $s_t \in \mathcal{S}$ is represented as a 4-dimensional vector:
+
+\begin{equation}
+s_t = \begin{bmatrix} s_t^{(1)} \\ s_t^{(2)} \\ s_t^{(3)} \\ s_t^{(4)} \end{bmatrix} = \begin{bmatrix} T_{obss}(t) \\ T_{radio} \\ T_{tx}(t) \\ CW_{idx}(t) \end{bmatrix}
+\label{eq:state_vector}
+\end{equation}
+
+where $s_t^{(1)} = T_{obss}(t)$ represents the remaining OBSS occupation time on the primary channel in slots, $s_t^{(2)} = T_{radio}$ denotes the radio transition time required for channel switching in slots, $T_{tx}(t)$ indicates the planned transmission duration for the current PPDU in slots, and $s_t^{(4)} = CW_{idx}(t)$ specifies the current contention window stage index $\in \{0, 1, \ldots, 6\}$.
+
+To ensure numerical stability and bounded input ranges for the neural network, each state component is normalized as
+
+\begin{equation}
+\tilde{s}_t^{(i)} = \frac{\min(s_t^{(i)}, C_i)}{C_i}, \quad i \in \{1,2,3,4\}
+\label{eq:state_normalization}
+\end{equation}
+where $C_1 = C_2 = C_3 = 1024$ slots and $C_4 = 8$ represent the normalization caps for each dimension.
+
+State observations occur at specific decision epochs when the STA is in the \texttt{PRIMARY\_BACKOFF} state and detects OBSS activity, regardless of the backoff counter value. This Semi-MDP structure allows decisions at irregular time intervals, capturing the temporal dynamics of wireless channel access.
+
+\subsection{Action Space Formulation}
+
+The action space $\mathcal{A}$ is discrete and binary, representing the fundamental NPCA decision:
+
+\begin{equation}
+\mathcal{A} = \{a_0, a_1\} = \{\text{StayPrimary}, \text{GoNPCA}\}
+\label{eq:action_space}
+\end{equation}
+
+The semantic meaning of each action is:
+
 \begin{itemize}
-\item Primary channel OBSS occupation time
-\item Radio transition time
-\item Transmission duration
-\item Contention window index
+\item $a_0$ (\texttt{StayPrimary}): The STA maintains its position on the primary channel, transitioning to \texttt{PRIMARY\_FROZEN} state and preserving its current contention window parameters
+\item $a_1$ (\texttt{GoNPCA}): The STA switches to the NPCA channel, resetting its contention window index to 0 and generating a new backoff value
 \end{itemize}
 
-\textbf{Action Space}: Binary actions $a_t \in \{0, 1\}$ where 0 represents staying on primary channel and 1 represents switching to NPCA channel.
+Once selected, an action defines an ``option'' in the Semi-MDP framework that persists until completion of the transmission attempt. This temporal extension allows the learning algorithm to evaluate long-term consequences of channel access decisions.
 
-\textbf{Reward Function}: Rewards are based on successful PPDU transmission length, with zero reward for transmission failures.
+\subsection{Reward Function Design}
 
-The state transition probability follows:
+The reward function implements a delayed reward mechanism that evaluates channel utilization efficiency over complete transmission cycles. Unlike traditional MDP formulations with immediate rewards, our Semi-MDP approach calculates rewards upon option termination.
+
+The episode reward is defined as:
+
 \begin{equation}
-P(s_{t+1}|s_t, a_t) = \mathbb{P}[\text{next state} | \text{current state, action}]\label{eq:transition}
+R_{episode} = \frac{\sum_{k=1}^{N_{tx}} L_k \cdot \mathbb{I}_{success}(k)}{T_{episode}}
+\label{eq:reward_function}
 \end{equation}
+where $N_{tx}$ is the total number of transmission attempts during the episode, $L_k$ represents the duration (in slots) of the $k$-th transmission attempt, $\mathbb{I}_{success}(k)$ is an indicator function equal to 1 if the $k$-th transmission is successful, 0 otherwise, and $T_{episode}$ is the total episode duration in slots for training stability.
 
-The Q-function update in our DQN framework is:
-\begin{equation}
-Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha[r_t + \gamma \max_{a'} Q(s_{t+1}, a') - Q(s_t, a_t)]\label{eq:qupdate}
-\end{equation}
+Regarding the success criteria, for primary channel transmissions, a transmission is considered successful if no OBSS interference occurs during the entire transmission duration. For NPCA transmissions, success is defined as the absence of intra-BSS collisions during the transmission. This reward structure encourages the agent to maximize overall spectrum utilization efficiency rather than optimizing for short-term gains, aligning with practical throughput maximization objectives in dense WLAN environments.
 
 \section{Proposed DRL Framework}
 
+This section describes the deep reinforcement learning framework for solving the Semi-MDP formulated NPCA decision problem. We adopt a DQN-based approach with experience replay to handle the temporal dependencies and irregular decision intervals inherent in the Semi-MDP structure.
+
 \subsection{Semi-MDP Learner Architecture}
 
-Our \texttt{SemiMDPLearner} class implements a DQN-based learning algorithm with experience replay and target network stabilization. The neural network architecture consists of fully connected layers with ReLU activations, mapping state observations to Q-values for each action.
+Our \texttt{SemiMDPLearner} class implements a DQN-based learning algorithm with experience replay and target network stabilization. The neural network architecture consists of three fully connected layers (128, 128, 64 neurons) with ReLU activations and dropout regularization, mapping normalized state observations to Q-values for each action.
 
-\subsection{Training Process}
+The key components include policy network $Q(s,a;\theta)$ for action-value estimation, target network $\hat{Q}(s,a;\hat{\theta})$ for stable learning targets, experience replay memory $\mathcal{D}$ with capacity 10,000 transitions, and Semi-MDP specific transition structure $(s, a, s', R, \tau, done)$, where $\tau$ represents the option duration in slots.
 
-The learning process follows these key steps:
-\begin{enumerate}
-\item State observation and action selection using $\epsilon$-greedy policy
-\item Experience storage in replay memory buffer
-\item Batch sampling and Q-network updates
-\item Target network periodic synchronization
-\item Exploration rate decay over episodes
-\end{enumerate}
+\subsection{Semi-MDP Training Algorithm}
 
-\subsection{Network Architecture and Hyperparameters}
+The algorithm initializes the DQN components and iteratively runs episodes of interaction with the environment. At each decision point, it observes the current state, selects an action using an $\epsilon$-greedy policy, and begins a new option. The option continues until termination conditions are met, at which point the accumulated reward and transition are stored in replay memory. Algorithm~\ref{alg:semi_mdp_npca} presents the complete training procedure for the Semi-MDP based NPCA learning system.
 
-The DQN consists of three hidden layers (128, 128, 64 neurons) with dropout regularization. Key hyperparameters include learning rate $\alpha = 0.001$, discount factor $\gamma = 0.99$, and replay memory capacity of 10,000 transitions.
+\begin{algorithm}[htbp]
+\caption{Semi-MDP Training for NPCA Decision Making}
+\label{alg:semi_mdp_npca}
+\begin{algorithmic}[1]
+\STATE Initialize $Q(s,a;\theta)$, target network $\hat{Q}(s,a;\hat{\theta})$, and replay memory $\mathcal{D}$
+\FOR{$episode = 1$ to $N_{episodes}$}
+    \STATE Reset environment and initialize option variables
+    \FOR{$slot = 0$ to $T_{episode}-1$}
+        \STATE Advance simulation to next decision point
+        \IF{decision point reached}
+            \STATE Observe and normalize state $\tilde{s}_t$ 
+            \IF{pending option exists}
+                \STATE Store transition in $\mathcal{D}$
+            \ENDIF
+            \STATE Select action $a_t$ using $\epsilon$-greedy with $Q(\tilde{s}_t, a; \theta)$
+            \STATE Begin new option: $(s_{option}, a_{option}) \leftarrow (\tilde{s}_t, a_t)$
+        \ENDIF
+        \STATE Execute step and accumulate option duration $\tau_{option}$
+        \IF{option terminates}
+            \STATE Calculate option reward $R_{option}$
+            \STATE Set pending transition
+        \ENDIF
+        \IF{$|\mathcal{D}| \geq batch\_size$}
+            \STATE Sample mini-batch from $\mathcal{D}$
+            \STATE Compute TD targets: \\ 
+                \IF{not done}
+                    \STATE $y_i = R_i + \gamma^{\tau_i} \max_{a'} \hat{Q}(s'_i, a'; \hat{\theta})$
+                \ELSE
+                    \STATE $y_i = R_i$
+                \ENDIF
+            \STATE Update $\theta$ by minimizing \\ 
+            \hspace*{\algorithmicindent} $L = \frac{1}{N} \sum_i (y_i - Q(s_i, a_i; \theta))^2$
+            \STATE Soft update target network: $\hat{\theta} \leftarrow \tau \theta + (1-\tau) \hat{\theta}$
+        \ENDIF
+    \ENDFOR
+    \STATE Finalize episode with delayed reward \\ 
+    \hspace*{\algorithmicindent} based on channel occupancy ratio
+\ENDFOR
+\RETURN $Q(s,a;\theta)$
+\end{algorithmic}
+\end{algorithm}
 
 \section{Simulation Results}
 
 \subsection{Experimental Setup}
 
-Simulations are conducted using a time-slotted framework with slot duration of 9 $\mu$s following IEEE 802.11ax standards. We evaluate networks with varying numbers of stations per channel, comparing DRL-based NPCA against baseline approaches including offload-only and local-only strategies.
+Simulations are conducted using a time-slotted framework with slot duration of 9 $\mu$s following IEEE 802.11 standards. We evaluate networks with 10 stations per channel, comparing DRL-based NPCA against baseline approaches including primary-only and npca-only strategies.
+
+\subsection{Network Architecture and Hyperparameters}
+
+Our DQN implementation consists of a neural network with three fully connected hidden layers containing 128, 128, and 64 neurons respectively, each followed by ReLU activation functions. Dropout regularization with a rate of 0.1 is applied to prevent overfitting. The input layer receives the 4-dimensional normalized state vector, while the output layer produces Q-values for the two possible actions.
+
+The training process employs experience replay with a memory buffer capacity of 10,000 transitions. Each transition stores the state, action, next state, cumulative reward, option duration ($\tau$), and termination flag. The target network is updated using soft updates with parameter $\tau_{target} = 0.005$.
+
+Key hyperparameters are summarized in Table~\ref{tab:hyperparams}. The learning rate is set to $1 \times 10^{-4}$ with the AdamW optimizer. The discount factor $\gamma = 0.99$ accounts for future rewards, while the epsilon-greedy exploration starts at $\epsilon_{start} = 0.9$ and decays exponentially to $\epsilon_{end} = 0.05$ over 10,000 steps to balance exploration and exploitation.
+
+\begin{table}[htbp]
+\caption{DQN Hyperparameters and Network Configuration}
+\begin{center}
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Parameter} & \textbf{Value} \\
+\hline
+\multicolumn{2}{|c|}{\textbf{Network Architecture}} \\
+\hline
+Hidden layers & [128, 128, 64] neurons \\
+Activation function & ReLU \\
+Dropout rate & 0.1 \\
+Input dimension & 4 (normalized state) \\
+Output dimension & 2 (action space) \\
+\hline
+\multicolumn{2}{|c|}{\textbf{Training Parameters}} \\
+\hline
+Learning rate ($\alpha$) & $1 \times 10^{-4}$ \\
+Discount factor ($\gamma$) & 0.99 \\
+Batch size & 128 \\
+Replay memory capacity & 10,000 \\
+Target network update ($\tau_{target}$) & 0.005 \\
+\hline
+\multicolumn{2}{|c|}{\textbf{Exploration Strategy}} \\
+\hline
+$\epsilon_{start}$ & 0.9 \\
+$\epsilon_{end}$ & 0.05 \\
+$\epsilon_{decay}$ & 10,000 steps \\
+\hline
+\multicolumn{2}{|c|}{\textbf{Training Episodes}} \\
+\hline
+Number of episodes & 100 \\
+Slots per episode & 1,000 \\
+\hline
+\end{tabular}
+\label{tab:hyperparams}
+\end{center}
+\end{table}
 
 \subsection{Performance Metrics}
 

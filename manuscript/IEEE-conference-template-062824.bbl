@@ -38,4 +38,7 @@ V.~Mnih, K.~Kavukcuoglu, D.~Silver, A.~Graves, I.~Antonoglou, D.~Wierstra, and M
 \bibitem{sutton2018reinforcement}
 R.~S. Sutton and A.~G. Barto, \emph{{Reinforcement Learning: An Introduction}}.\hskip 1em plus 0.5em minus 0.4em\relax MIT press, 2018.
 
+\bibitem{sutton1999between}
+R.~S. Sutton, D.~Precup, and S.~Singh, ``Between mdps and semi-mdps: A framework for temporal abstraction in reinforcement learning,'' \emph{Artificial intelligence}, vol. 112, no. 1-2, pp. 181--211, 1999.
+
 \end{thebibliography}

@@ -9,33 +9,40 @@ import pandas as pd
 import os
 from drl_framework.random_access import STA, Channel, Simulator
 
-def create_environment(num_slots=200, num_stas=10):
-    """시뮬레이션 환경 생성"""
-    # Primary 채널: OBSS 발생
-    primary_channel = Channel(
-        channel_id=0,
-        obss_generation_rate=0.3,  
-        obss_duration_range=(20, 40)
-    )
+def create_environment(num_slots=200):
+    """시뮬레이션 환경 생성 - 트레이닝 환경과 동일하게 설정"""
+    # 채널 설정 - 트레이닝과 동일
+    channels = [
+        Channel(channel_id=0, obss_generation_rate=0),  # Primary channel (no OBSS)
+        Channel(channel_id=1, obss_generation_rate=0.01, obss_duration_range=(10, 150))  # OBSS가 발생하는 채널
+    ]
     
-    # NPCA 채널: OBSS 없음
-    npca_channel = Channel(
-        channel_id=1,
-        obss_generation_rate=0.0,  
-        obss_duration_range=(0, 0)
-    )
-    
-    channels = [primary_channel, npca_channel]
-    
-    # STA 설정
+    # STA 설정 - 트레이닝과 동일하게 각 채널에 10개씩
     stas = []
-    for i in range(num_stas):
+    
+    # Channel 1의 STA들 (NPCA 지원, 학습 대상) - 10개
+    for i in range(10):
         sta = STA(
             sta_id=i,
-            channel_id=0,
-            primary_channel=primary_channel,
-            npca_channel=npca_channel,
-            npca_enabled=True
+            channel_id=1,  # OBSS가 발생하는 채널
+            primary_channel=channels[1],  # Channel 1이 이들의 primary
+            npca_channel=channels[0],     # Channel 0을 NPCA로 사용
+            npca_enabled=True,
+            ppdu_duration=33,
+            radio_transition_time=1
+        )
+        stas.append(sta)
+    
+    # Channel 0의 STA들 (기존 방식, 비교용) - 10개
+    for i in range(10, 20):
+        sta = STA(
+            sta_id=i,
+            channel_id=0,  # OBSS가 없는 채널
+            primary_channel=channels[0],
+            npca_channel=None,
+            npca_enabled=False,
+            ppdu_duration=33,
+            radio_transition_time=1
         )
         stas.append(sta)
     
@@ -45,29 +52,30 @@ def create_environment(num_slots=200, num_stas=10):
         num_slots=num_slots
     )
 
-def run_baseline_test(strategy, num_episodes=50, num_slots=200, num_stas=10):
+def run_baseline_test(strategy, num_episodes=50, num_slots=200):
     """베이스라인 전략 테스트"""
     episode_rewards = []
     
     for episode in range(num_episodes):
-        simulator = create_environment(num_slots, num_stas)
+        simulator = create_environment(num_slots)
         
-        # 고정 전략 설정
+        # 고정 전략 설정 - NPCA 지원 STA들만 (Channel 1의 STA들)
         for sta in simulator.stas:
-            if strategy == "always_primary":
-                sta._fixed_action = 0  
-            elif strategy == "always_npca":
-                sta._fixed_action = 1  
+            if sta.npca_enabled:  # NPCA 지원 STA만 전략 적용
+                if strategy == "always_primary":
+                    sta._fixed_action = 0  
+                elif strategy == "always_npca":
+                    sta._fixed_action = 1  
         
         # 시뮬레이션 실행
         simulator.run()
         
-        # 총 성공 전송 슬롯 수 계산
-        total_reward = sum(sta.episode_reward for sta in simulator.stas)
-        episode_rewards.append(total_reward)
+        # NPCA 지원 STA들의 성공 전송 슬롯 수만 계산 (학습 대상)
+        npca_stas_reward = sum(sta.episode_reward for sta in simulator.stas if sta.npca_enabled)
+        episode_rewards.append(npca_stas_reward)
         
         if episode % 10 == 0:
-            print(f"  Episode {episode}: Total Successful Slots = {total_reward:.1f}")
+            print(f"  Episode {episode}: NPCA STAs Successful Slots = {npca_stas_reward:.1f}")
     
     return episode_rewards
 
@@ -141,23 +149,25 @@ def main():
     
     num_episodes = 50
     num_slots = 200
-    num_stas = 10
     results_dir = "./baseline_results"
     
     os.makedirs(results_dir, exist_ok=True)
     
     print(f"테스트 에피소드 수: {num_episodes}")
     print(f"에피소드당 슬롯 수: {num_slots}")
-    print(f"NPCA enabled STA 수: {num_stas}")
+    print(f"NPCA enabled STA 수: 10 (Channel 1)")
+    print(f"Non-NPCA STA 수: 10 (Channel 0)")
+    print(f"OBSS 생성률: 0.01 (Channel 1)")
+    print(f"OBSS 지속시간: 10-150 slots")
     print()
     
     # Always Primary 테스트
     print("1. Always Primary 전략 테스트 중...")
-    primary_rewards = run_baseline_test("always_primary", num_episodes, num_slots, num_stas)
+    primary_rewards = run_baseline_test("always_primary", num_episodes, num_slots)
     
     # Always NPCA 테스트
     print("\n2. Always NPCA 전략 테스트 중...")
-    npca_rewards = run_baseline_test("always_npca", num_episodes, num_slots, num_stas)
+    npca_rewards = run_baseline_test("always_npca", num_episodes, num_slots)
     
     # 결과 저장
     results_df = pd.DataFrame({

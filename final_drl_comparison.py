@@ -17,8 +17,8 @@ def create_environment(num_slots=200, num_stas=10):
     # Primary 채널: OBSS 발생
     primary_channel = Channel(
         channel_id=0,
-        obss_generation_rate=0.3,  
-        obss_duration_range=(20, 40)
+        obss_generation_rate=0.01,  
+        obss_duration_range=(10, 150)
     )
     
     # NPCA 채널: OBSS 없음  
@@ -203,7 +203,7 @@ def main():
     print("=" * 70)
     
     model_path = "./semi_mdp_results/semi_mdp_model.pth"
-    num_episodes = 50
+    num_episodes = 500
     num_slots = 200
     num_stas = 10
     results_dir = "./final_comparison"
