@@ -1,10 +1,48 @@
 import copy
 
-# Configuration
+# === Core Simulation Parameters ===
 simulation_time = 1_000  # Total simulation time in us
 simulation_slot = simulation_time // 9  # Slot duration in us (9us for 802.11ax)
-frame_size = 33  # Size of each frame in slots
-# stas_per_channel = [2, 2]  # Number of STAs per channel
+
+# === Frame and Transmission Parameters ===
+PPDU_DURATION = 33  # PPDU duration in slots (default frame size)
+RADIO_TRANSITION_TIME = 1  # Radio transition time in slots
+ENERGY_COST = 15.0  # Fixed energy cost per transmission attempt (increased for better differentiation)
+
+# PPDU Duration Variants for controlled experiments
+PPDU_DURATION_VARIANTS = {
+    'short': 20,       # Short frame (20 slots)
+    'medium': 33,      # Default frame (33 slots)  
+    'long': 50,        # Long frame (50 slots)
+    'extra_long': 80,  # Extra long frame (80 slots)
+}
+
+# === OBSS Parameters ===
+OBSS_GENERATION_RATE = {
+    'primary': 0.01,    # OBSS generation rate for primary channel
+    'secondary': 0.0,   # OBSS generation rate for secondary/NPCA channel
+    'high': 0.05,       # High OBSS rate for stress testing
+    'medium': 0.03,     # Medium OBSS rate
+    'low': 0.01,        # Low OBSS rate
+}
+
+OBSS_DURATION_RANGE = {
+    'short': (10, 30),       # Short OBSS duration
+    'medium': (50, 100),     # Medium OBSS duration  
+    'long': (150, 250),      # Long OBSS duration (increased)
+    'extreme': (300, 500),   # Extreme OBSS duration
+    'fixed_20': (20, 20),    # Fixed 20 slots
+    'fixed_50': (50, 50),    # Fixed 50 slots
+    'fixed_100': (100, 100), # Fixed 100 slots
+    'fixed_150': (150, 150), # Fixed 150 slots
+    'fixed_200': (200, 200), # Fixed 200 slots (new)
+    'fixed_300': (300, 300), # Fixed 300 slots (new)
+}
+
+# === Training Parameters ===
+DEFAULT_NUM_EPISODES = 3000  # Increased for better learning
+DEFAULT_NUM_SLOTS_PER_EPISODE = 300  # Increased for more decisions per episode
+DEFAULT_NUM_STAS = 10
 
 # 공통 설정
 base_config = {
@@ -12,15 +50,18 @@ base_config = {
     "simulation_time": simulation_time,
     "obss_enabled_per_channel": [False, True],
     # "npca_enabled": [False, True],
-    "obss_generation_rate": 0.05,
+    "obss_generation_rate": OBSS_GENERATION_RATE['high'],  # 기존 호환성 유지
     "obss_frame_size_range": (20, 201),  # 범위로 설정
+    "ppdu_duration": PPDU_DURATION,
+    "radio_transition_time": RADIO_TRANSITION_TIME,
+    "energy_cost": ENERGY_COST,
 }
 
-# 후보 값
+# 후보 값 (기존 호환성 유지)
 sta_values = [2, 6, 10]  # 각 채널의 STA 수
 # sta_values = [2]  # 각 채널의 STA 수
-frame_sizes = [frame_size, frame_size * 5]
-# frame_sizes = [frame_size]
+frame_sizes = [PPDU_DURATION, PPDU_DURATION * 5]
+# frame_sizes = [PPDU_DURATION]
 frame_labels = {33: "fshort", 33*5: "flong"}
 # npca_options = [[False, True]]  # 추가된 부분
 npca_options = [[False, True], [False, False]]  # 추가된 부분

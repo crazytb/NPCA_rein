@@ -227,10 +227,18 @@ class STA:
         return x
     
     def calculate_reward(self, slot: int) -> float:
-        """지연된 보상 구조: 에피소드 종료 시에만 보상 계산"""
-        # 즉시 보상 제거: 모든 슬롯에서 0 반환
-        # 실제 보상은 에피소드 종료 시 channel_occupancy_time으로 계산
-        return 0.0
+        """전송 완료 시 보상 계산: 성공 시 PPDU duration 보상, 모든 전송 시도에 고정 에너지 비용 차감"""
+        reward = 0.0
+        
+        # 전송 성공 시 PPDU duration만큼 보상
+        if hasattr(self, 'tx_success') and self.tx_success:
+            reward += self.ppdu_duration
+        
+        # 모든 전송 시도에 대해 고정 에너지 비용 차감 (최초 전송 + 재전송)
+        from drl_framework.configs import ENERGY_COST
+        reward -= ENERGY_COST
+        
+        return reward
 
     def step(self, slot: int):
         # 옵션이 활성화되어 있으면 tau 증가
@@ -276,7 +284,7 @@ class STA:
 
                     # 액션 선택 (고정 전략 또는 epsilon-greedy)
                     if hasattr(self, '_fixed_action'):
-                        action = self._fixed_action
+                        action = self._fixed_action()  # 함수 호출
                     else:
                         state_tensor = torch.tensor(obs_vec, dtype=torch.float32, device=self.learner.device).unsqueeze(0)
                         action = self.learner.select_action(state_tensor)

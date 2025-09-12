@@ -17,37 +17,50 @@ import numpy as np
 import matplotlib.pyplot as plt
 from drl_framework.random_access import Channel
 from drl_framework.train import train_semi_mdp
+from drl_framework.configs import (
+    PPDU_DURATION, 
+    PPDU_DURATION_VARIANTS,
+    RADIO_TRANSITION_TIME, 
+    OBSS_GENERATION_RATE, 
+    OBSS_DURATION_RANGE,
+    DEFAULT_NUM_EPISODES,
+    DEFAULT_NUM_SLOTS_PER_EPISODE,
+    DEFAULT_NUM_STAS
+)
 
-def create_training_config(obss_duration):
+def create_training_config(obss_duration, ppdu_variant='medium'):
     """학습을 위한 설정 생성"""
     
-    # 채널 설정 - OBSS duration을 고정값으로 설정
+    # PPDU duration 설정
+    ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
+    
+    # 채널 설정 - centralized configs 사용
     channels = [
-        Channel(channel_id=0, obss_generation_rate=0),  # Primary channel (no OBSS)
-        Channel(channel_id=1, obss_generation_rate=0.01, obss_duration_range=(obss_duration, obss_duration))  # 고정된 OBSS duration
+        Channel(channel_id=0, obss_generation_rate=OBSS_GENERATION_RATE['secondary']),  # Secondary/NPCA channel (no OBSS)
+        Channel(channel_id=1, obss_generation_rate=OBSS_GENERATION_RATE['primary'], obss_duration_range=(obss_duration, obss_duration))  # Primary channel (with OBSS)
     ]
     
-    # STA 설정 - 각 채널에 10개씩 STA 배치
+    # STA 설정 - PPDU duration 변형 적용
     stas_config = []
     
-    # Channel 1의 STA들 (NPCA 지원) - 10개
-    for i in range(10):
+    # Primary 채널의 STA들 (NPCA 지원) - DEFAULT_NUM_STAS개
+    for i in range(DEFAULT_NUM_STAS):
         stas_config.append({
             "sta_id": i,
-            "channel_id": 1,
+            "channel_id": 1,  # Primary channel
             "npca_enabled": True,
-            "ppdu_duration": 33,
-            "radio_transition_time": 1
+            "ppdu_duration": ppdu_duration,
+            "radio_transition_time": RADIO_TRANSITION_TIME
         })
     
-    # Channel 0의 STA들 (기존 방식) - 10개
-    for i in range(10, 20):
+    # Secondary 채널의 STA들 (기존 방식) - DEFAULT_NUM_STAS개
+    for i in range(DEFAULT_NUM_STAS, DEFAULT_NUM_STAS * 2):
         stas_config.append({
             "sta_id": i,
-            "channel_id": 0, 
+            "channel_id": 0,  # Secondary channel
             "npca_enabled": False,
-            "ppdu_duration": 33,
-            "radio_transition_time": 1
+            "ppdu_duration": ppdu_duration,
+            "radio_transition_time": RADIO_TRANSITION_TIME
         })
     
     return channels, stas_config
@@ -118,17 +131,19 @@ def plot_training_results(episode_rewards, episode_losses, save_dir="./results",
     print(f"Results saved to {save_dir}/training_results.png")
     print(f"Running averages: Rewards (window={reward_window}), Loss (window={loss_window})")
 
-def run_experiment(obss_duration, experiment_name):
+def run_experiment(obss_duration, experiment_name, ppdu_variant='medium'):
     """단일 OBSS duration 값에 대한 실험 실행"""
-    print(f"실험 시작: {experiment_name} (OBSS Duration: {obss_duration})")
+    ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
+    print(f"실험 시작: {experiment_name}")
+    print(f"OBSS Duration: {obss_duration}, PPDU Duration: {ppdu_duration} ({ppdu_variant})")
     print("-" * 50)
     
     # 설정 생성
-    channels, stas_config = create_training_config(obss_duration)
+    channels, stas_config = create_training_config(obss_duration, ppdu_variant)
     
-    # 학습 파라미터
-    num_episodes = 5000  # 비교를 위해 에피소드 수를 줄임
-    num_slots_per_episode = 200
+    # 학습 파라미터 - centralized configs 사용
+    num_episodes = DEFAULT_NUM_EPISODES
+    num_slots_per_episode = DEFAULT_NUM_SLOTS_PER_EPISODE
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # 학습 실행
@@ -152,7 +167,9 @@ def run_experiment(obss_duration, experiment_name):
         'episode_rewards': episode_rewards,
         'episode_losses': episode_losses,
         'steps_done': learner.steps_done,
-        'obss_duration': obss_duration
+        'obss_duration': obss_duration,
+        'ppdu_variant': ppdu_variant,
+        'ppdu_duration': ppdu_duration
     }, f"{results_dir}/model.pth")
     
     # 그래프 생성
@@ -281,50 +298,111 @@ def plot_comparison_results(experiment_results):
     
     print(f"비교 결과 저장됨: {comparison_dir}/obss_duration_comparison.png")
 
-def main():
-    """메인 학습 함수 - OBSS duration 비교 실험"""
-    print("="*60)
-    print("OBSS Duration 비교 실험 시작")
-    print("="*60)
-    
-    # 테스트할 OBSS duration 값들 (slots 단위)
-    obss_durations = [20, 50, 100, 150]  # 짧음, 중간-짧음, 중간-긴, 긴
+def run_ppdu_experiments(obss_duration=100):
+    """여러 PPDU duration 변형에 대해 실험 실행"""
+    print("="*70)
+    print("PPDU Duration 변인통제 실험")
+    print("="*70)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    print(f"테스트할 OBSS duration 값들: {obss_durations}")
+    print(f"OBSS Duration: {obss_duration} slots")
     print()
     
-    # 모든 실험 결과 저장
-    all_results = []
+    results = []
     
-    # 각 OBSS duration에 대해 실험 실행
-    for obss_duration in obss_durations:
-        experiment_name = f"obss_{obss_duration}_slots"
-        result = run_experiment(obss_duration, experiment_name)
-        all_results.append(result)
+    # 각 PPDU duration 변형에 대해 실험
+    for variant, duration in PPDU_DURATION_VARIANTS.items():
+        print(f"\n{'='*50}")
+        print(f"PPDU Duration 실험: {variant} ({duration} slots)")
+        print(f"{'='*50}")
+        
+        experiment_name = f"ppdu_{variant}_obss_{obss_duration}"
+        result = run_experiment(obss_duration, experiment_name, ppdu_variant=variant)
+        result['ppdu_variant'] = variant
+        results.append(result)
     
-    # 비교 결과 시각화
-    plot_comparison_results(all_results)
-    
-    # 종합 분석 출력
-    print("\n" + "="*60)
-    print("OBSS Duration 비교 실험 완료!")
+    return results
+
+def main():
+    """메인 학습 함수"""
     print("="*60)
-    print("실험 결과 요약:")
-    print("-" * 40)
-    
-    for result in all_results:
-        print(f"OBSS Duration {result['obss_duration']:3d} slots: "
-              f"최종 평균 보상 = {result['final_avg_reward']:6.2f}, "
-              f"최대 보상 = {result['max_reward']:6.2f}")
-    
-    # 최적 OBSS duration 식별
-    best_result = max(all_results, key=lambda x: x['final_avg_reward'])
-    print(f"\n최적 OBSS Duration: {best_result['obss_duration']} slots "
-          f"(평균 보상: {best_result['final_avg_reward']:.2f})")
-    
+    print("Semi-MDP DRL 모델 훈련")
     print("="*60)
+    
+    # 커맨드라인 인자 처리
+    import sys
+    
+    # 실험 모드 결정
+    run_mode = 'single'  # 기본값: 단일 실험
+    obss_duration = 50
+    ppdu_variant = 'medium'
+    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == 'ppdu_experiments':
+            run_mode = 'ppdu_experiments'
+            if len(sys.argv) > 2:
+                try:
+                    obss_duration = int(sys.argv[2])
+                except ValueError:
+                    print("잘못된 OBSS duration 값입니다. 기본값(100)을 사용합니다.")
+        else:
+            try:
+                obss_duration = int(sys.argv[1])
+                if len(sys.argv) > 2:
+                    ppdu_variant = sys.argv[2]
+                    if ppdu_variant not in PPDU_DURATION_VARIANTS:
+                        print(f"잘못된 PPDU variant입니다. 사용 가능한 값: {list(PPDU_DURATION_VARIANTS.keys())}")
+                        ppdu_variant = 'medium'
+            except ValueError:
+                print("잘못된 OBSS duration 값입니다. 기본값(50)을 사용합니다.")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    
+    if run_mode == 'ppdu_experiments':
+        # PPDU duration 변인통제 실험
+        results = run_ppdu_experiments(obss_duration)
+        
+        print("\n" + "="*70)
+        print("PPDU Duration 실험 결과 요약")
+        print("="*70)
+        for result in results:
+            variant = result['ppdu_variant']
+            ppdu_dur = PPDU_DURATION_VARIANTS[variant]
+            print(f"{variant:12} ({ppdu_dur:2d} slots): 평균 보상 {result['final_avg_reward']:6.2f}, "
+                  f"최대 보상 {result['max_reward']:6.2f}")
+        print("="*70)
+        
+    else:
+        # 단일 실험 실행
+        print(f"OBSS Duration: {obss_duration} slots")
+        print(f"PPDU Variant: {ppdu_variant}")
+        print()
+        
+        experiment_name = f"ppdu_{ppdu_variant}_obss_{obss_duration}"
+        result = run_experiment(obss_duration, experiment_name, ppdu_variant)
+        
+        # 결과 출력
+        print("\n" + "="*60)
+        print("DRL 모델 훈련 완료!")
+        print("="*60)
+        print("훈련 결과:")
+        print("-" * 40)
+        print(f"OBSS Duration: {result['obss_duration']} slots")
+        print(f"PPDU Variant: {ppdu_variant}")
+        print(f"최종 평균 보상 (최근 50 에피소드): {result['final_avg_reward']:.2f}")
+        print(f"최대 보상: {result['max_reward']:.2f}")
+        print(f"총 학습 스텝: {result['steps_done']}")
+        
+        # 저장 위치 안내
+        results_dir = f"./obss_comparison_results/{experiment_name}"
+        print(f"\n모델 저장 위치: {results_dir}/model.pth")
+        print(f"훈련 그래프: {results_dir}/training_results.png")
+        
+        print("\n다음 단계:")
+        print("python comparison_test.py 를 실행하여 훈련된 모델과 베이스라인을 비교하세요.")
+        print("="*60)
 
 if __name__ == "__main__":
     main()
