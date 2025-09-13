@@ -199,7 +199,7 @@ def train(env, policy_net, target_net, optimizer, device, num_episodes=50):
 
     return episode_rewards
 
-def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episode=1000, device=None):
+def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episode=1000, device=None, random_ppdu=False):
     """
     Semi-MDP를 사용한 NPCA STA 학습 함수
     
@@ -248,7 +248,9 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
                 npca_enabled=config.get("npca_enabled", False),
                 radio_transition_time=config.get("radio_transition_time", 1),
                 ppdu_duration=config.get("ppdu_duration", 33),
-                learner=learner if config.get("npca_enabled", False) else None
+                random_ppdu=random_ppdu,
+                learner=learner if config.get("npca_enabled", False) else None,
+                num_slots_per_episode=num_slots_per_episode
             )
             
             # CSV 로깅을 위한 설정 (NPCA enabled STA만)
@@ -264,32 +266,13 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
         simulator.device = device
         simulator.run()
         
-        # 에피소드별 총 보상 수집 - episode_reward 사용
+        # 에피소드별 총 보상 수집 - new_episode_reward 사용
         total_reward = 0
         for sta in stas:
-            if sta.npca_enabled:  # NPCA 가능한 STA만 보상 수집
-                total_reward += sta.episode_reward
-                
-            # 에피소드 종료 시 남은 옵션들 정리
-            if sta._opt_active:
-                sta._end_option()
-                
-            # pending 옵션들을 done=True로 finalize 
-            if sta._pending:
-                final_obs = sta.get_obs()
-                final_obs_vec = sta.obs_to_vec(final_obs, normalize=True)
-                sta._finalize_pending_with_next_state(
-                    next_obs_vec=final_obs_vec,
-                    memory=learner.memory,
-                    done=True,  # 에피소드 종료
-                    device=learner.device,
-                    num_slots_per_episode=num_slots_per_episode
-                )
-                
-            # 에피소드 보상 초기화
-            sta.episode_reward = 0.0
+            if sta.npca_enabled:
+                total_reward += sta.new_episode_reward
+            sta.new_episode_reward = 0.0 # Reset for next episode
         
-        # 보상을 num_slots_per_episode로 정규화 (에피소드당 슬롯 효율성)
         normalized_reward = total_reward / num_slots_per_episode
         episode_rewards.append(normalized_reward)
         
@@ -325,3 +308,151 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
         print(f"Total decision points logged: {len(decision_log)}")
     
     return episode_rewards, episode_losses, learner
+
+def train_semi_mdp_with_env(num_episodes=500, num_slots_per_episode=3000, device=None, random_env=True):
+    """
+    NPCASemiMDPEnv 환경을 직접 사용하는 Semi-MDP 학습 함수
+    
+    Args:
+        num_episodes: 학습 에피소드 수
+        num_slots_per_episode: 에피소드당 슬롯 수
+        device: torch device
+        random_env: 랜덤 환경 사용 여부
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Semi-MDP 환경 생성
+    from npca_semi_mdp_env import NPCASemiMDPEnv
+    
+    env = NPCASemiMDPEnv(
+        num_stas=2,
+        num_slots=num_slots_per_episode,
+        obss_generation_rate=0.05,  # Base rate (will be randomized if random_env=True)
+        npca_enabled=True,
+        throughput_weight=10.0,
+        latency_penalty_weight=0.1,
+        random_env=random_env
+    )
+    
+    # 기존 4차원 관찰 공간 사용 (호환성 유지)
+    obs_dim = 4  # [obss_remaining, current_slot, tx_duration, cw_index]
+    n_actions = env.action_space.n
+    
+    # SemiMDPLearner 초기화
+    learner = SemiMDPLearner(obs_dim, n_actions, device)
+    
+    episode_rewards = []
+    episode_losses = []
+    
+    print(f"Starting Semi-MDP Environment training on {device}")
+    print(f"Episodes: {num_episodes}, Slots per episode: {num_slots_per_episode}")
+    print(f"Random environment: {random_env}")
+    
+    for episode in range(num_episodes):
+        obs, _ = env.reset()
+        # 기존 4차원 관찰 벡터로 변환 (호환성 유지)
+        obs_vector = dict_to_legacy_vector(obs)
+        obs_tensor = torch.tensor(obs_vector, dtype=torch.float32, device=device).unsqueeze(0)
+        
+        episode_reward = 0.0
+        done = False
+        step_count = 0
+        max_steps = 1000  # Prevent infinite episodes
+        
+        while not done and step_count < max_steps:
+            # Action selection
+            action = learner.select_action(obs_tensor)
+            learner.steps_done += 1
+            
+            # Environment step
+            try:
+                next_obs, reward, done, truncated, info = env.step(action)
+                episode_reward += reward
+                
+                if not done and not truncated:
+                    # 기존 4차원 관찰 벡터로 변환 (호환성 유지)
+                    next_obs_vector = dict_to_legacy_vector(next_obs)
+                    next_obs_tensor = torch.tensor(next_obs_vector, dtype=torch.float32, device=device).unsqueeze(0)
+                else:
+                    next_obs_tensor = None
+                
+                # Store transition
+                duration = info.get('duration', 1)  # Semi-MDP duration
+                learner.memory.push(
+                    obs_tensor.squeeze(0),
+                    action,
+                    next_obs_tensor.squeeze(0) if next_obs_tensor is not None else None,
+                    reward,
+                    duration,
+                    done or truncated
+                )
+                
+                obs_tensor = next_obs_tensor
+                step_count += 1
+                
+            except Exception as e:
+                if "step() called when not at decision point" in str(e):
+                    # No decision point found, end episode
+                    done = True
+                else:
+                    raise e
+        
+        episode_rewards.append(episode_reward)
+        
+        # Training
+        if len(learner.memory) >= BATCH_SIZE:
+            for _ in range(3):  # Multiple training steps per episode
+                loss = learner.optimize_model()
+                if loss is not None:
+                    episode_losses.append(loss)
+            
+            learner.update_target_network()
+        
+        # Progress logging
+        if episode % 10 == 0:
+            avg_reward = sum(episode_rewards[-10:]) / min(10, len(episode_rewards))
+            avg_loss = sum(episode_losses[-10:]) / max(1, len(episode_losses[-10:]))
+            epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * learner.steps_done / EPS_DECAY)
+            print(f"Episode {episode:3d}: Avg Reward = {avg_reward:6.2f}, "
+                  f"Avg Loss = {avg_loss:.4f}, Epsilon = {epsilon:.3f}, "
+                  f"Memory Size = {len(learner.memory)}")
+    
+    print("Training completed!")
+    
+    return episode_rewards, episode_losses, learner
+
+def dict_to_legacy_vector(obs_dict):
+    """Semi-MDP Dict 관찰을 기존 4차원 벡터로 변환 (호환성 유지)"""
+    return [
+        float(obs_dict.get('obss_remaining', 0)),     # OBSS 남은 시간
+        float(obs_dict.get('current_slot', 1)),       # 현재 슬롯 (radio transition time 대용)
+        33.0,  # tx_duration (고정값, PPDU_DURATION)
+        float(obs_dict.get('cw_index', 0))            # CW 인덱스
+    ]
+
+def flatten_dict_observation(obs_dict):
+    """Dict 관찰을 flat vector로 변환"""
+    result = []
+    
+    # Scalar values
+    for key in ['current_slot', 'backoff_counter', 'cw_index', 'obss_remaining',
+                'channel_busy_intra', 'channel_busy_obss', 'npca_channel_busy',
+                'current_obss_duration', 'current_ppdu_duration']:
+        result.append(float(obs_dict.get(key, 0)))
+    
+    # Array values
+    for key in ['primary_busy_history', 'obss_busy_history', 'npca_busy_history']:
+        if key in obs_dict:
+            result.extend(obs_dict[key].flatten())
+        else:
+            result.extend([0.0] * 10)  # Default history length
+    
+    # Single-element arrays
+    for key in ['obss_frequency', 'avg_obss_duration']:
+        if key in obs_dict:
+            result.append(float(obs_dict[key][0]))
+        else:
+            result.append(0.0)
+    
+    return result

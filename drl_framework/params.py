@@ -17,6 +17,6 @@ BATCH_SIZE = 128
 GAMMA = 0.99
 EPS_START = 0.9
 EPS_END = 0.05
-EPS_DECAY = 100  # 탐험 기간 10배 증가
+EPS_DECAY = 1000  # Random environment를 위한 더 긴 탐험 기간
 TAU = 0.005
 LR = 1e-4  # 학습률 증가로 학습 속도 개선

@@ -7,6 +7,12 @@ import random
 
 # Import from your random_access.py
 from drl_framework.random_access import STA, Channel, Simulator, STAState, OccupyRequest
+from drl_framework.configs import (
+    RANDOM_OBSS_DURATION_RANGE, 
+    RANDOM_PPDU_VARIANTS, 
+    RANDOM_OBSS_GENERATION_RATE_RANGE,
+    PPDU_DURATION_VARIANTS
+)
 
 class NPCASemiMDPEnv(gym.Env):
     """
@@ -22,7 +28,11 @@ class NPCASemiMDPEnv(gym.Env):
                  throughput_weight: float = 10.0,  # 처리량 보상 강화
                  latency_penalty_weight: float = 0.1,  # 지연 패널티
                  # State space enhancement
-                 history_length: int = 10):  # Channel history length
+                 history_length: int = 10,  # Channel history length
+                 # Random environment parameters
+                 random_env: bool = False,  # Enable random OBSS/PPDU variations
+                 obss_duration_range: Tuple[int, int] = None,  # Custom OBSS duration range
+                 ppdu_variants: list = None):  # Custom PPDU variants list
         super().__init__()
         
         self.num_stas = num_stas
@@ -38,15 +48,25 @@ class NPCASemiMDPEnv(gym.Env):
         self.history_length = history_length
         self.channel_history = []  # [primary_busy, obss_busy, npca_busy] for last N slots
         
+        # Random environment setup
+        self.random_env = random_env
+        self.obss_duration_range = obss_duration_range or RANDOM_OBSS_DURATION_RANGE
+        self.ppdu_variants = ppdu_variants or RANDOM_PPDU_VARIANTS
+        
+        # Current episode parameters (will be randomized if random_env=True)
+        self.current_obss_duration = None
+        self.current_ppdu_variant = None
+        self.current_ppdu_duration = None
+        
         # Action Space: 0 = stay in PRIMARY (frozen), 1 = switch to NPCA
         self.action_space = spaces.Discrete(2)
         
-        # Enhanced observation space with channel history
+        # Enhanced observation space with channel history and environment parameters
         self.observation_space = spaces.Dict({
             'current_slot': spaces.Discrete(num_slots),
             'backoff_counter': spaces.Discrete(1024),  # Max CW
             'cw_index': spaces.Discrete(7),  # CW stages
-            'obss_remaining': spaces.Discrete(100),  # Max OBSS duration
+            'obss_remaining': spaces.Discrete(500),  # Max OBSS duration (increased for random env)
             'channel_busy_intra': spaces.Discrete(2),  # Boolean
             'channel_busy_obss': spaces.Discrete(2),   # Boolean
             'npca_channel_busy': spaces.Discrete(2),   # Boolean
@@ -56,7 +76,10 @@ class NPCASemiMDPEnv(gym.Env):
             'npca_busy_history': spaces.Box(low=0, high=1, shape=(history_length,), dtype=np.float32),
             # Aggregate statistics
             'obss_frequency': spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32),
-            'avg_obss_duration': spaces.Box(low=0, high=100, shape=(1,), dtype=np.float32),
+            'avg_obss_duration': spaces.Box(low=0, high=500, shape=(1,), dtype=np.float32),
+            # Environment parameters (for model awareness)
+            'current_obss_duration': spaces.Discrete(500),  # Current episode OBSS duration
+            'current_ppdu_duration': spaces.Discrete(100),  # Current episode PPDU duration
         })
         
         self.reset()
@@ -64,12 +87,28 @@ class NPCASemiMDPEnv(gym.Env):
     def reset(self, seed=None, options=None) -> Tuple[Dict, Dict]:
         super().reset(seed=seed)
         
-        # Initialize channels
-        self.primary_channel = Channel(0, self.obss_generation_rate)
+        # Simplified random environment: only PPDU duration varies, OBSS fixed at 100
+        if self.random_env:
+            self.current_obss_duration = 100  # Fixed OBSS duration
+            # Random PPDU variant only
+            variant_options = ['short', 'medium', 'long', 'extra_long']
+            self.current_ppdu_variant = random.choice(variant_options)
+            self.current_ppdu_duration = PPDU_DURATION_VARIANTS[self.current_ppdu_variant]
+            current_obss_gen_rate = self.obss_generation_rate  # Fixed OBSS rate
+        else:
+            # Use fixed values (backward compatibility)
+            self.current_obss_duration = 100  # Default fixed value
+            self.current_ppdu_variant = 'medium'
+            self.current_ppdu_duration = PPDU_DURATION_VARIANTS['medium']
+            current_obss_gen_rate = self.obss_generation_rate
+        
+        # Initialize channels with current episode parameters
+        self.primary_channel = Channel(0, current_obss_gen_rate, 
+                                     obss_duration_range=(self.current_obss_duration, self.current_obss_duration))
         self.npca_channel = Channel(1, 0.0) if self.npca_enabled else None
         self.channels = [self.primary_channel, self.npca_channel] if self.npca_channel else [self.primary_channel]
         
-        # Initialize STAs
+        # Initialize STAs with current PPDU duration
         self.stas = []
         for i in range(self.num_stas):
             sta = STA(
@@ -77,7 +116,8 @@ class NPCASemiMDPEnv(gym.Env):
                 channel_id=0,  # Primary channel
                 primary_channel=self.primary_channel,
                 npca_channel=self.npca_channel,
-                npca_enabled=self.npca_enabled
+                npca_enabled=self.npca_enabled,
+                ppdu_duration=self.current_ppdu_duration
             )
             self.stas.append(sta)
         
@@ -203,7 +243,27 @@ class NPCASemiMDPEnv(gym.Env):
             'npca_busy_history': npca_history,
             'obss_frequency': np.array([obss_frequency], dtype=np.float32),
             'avg_obss_duration': np.array([avg_obss_duration], dtype=np.float32),
+            # Environment parameters (for model awareness)
+            'current_obss_duration': self.current_obss_duration,
+            'current_ppdu_duration': self.current_ppdu_duration,
         }
+    
+    def _update_random_ppdu_duration(self):
+        """매 결정 시점에서 PPDU duration을 랜덤하게 업데이트"""
+        from drl_framework.configs import PPDU_DURATION_VARIANTS
+        
+        # PPDU 변형 중 랜덤 선택
+        variant_options = ['short', 'medium', 'long', 'extra_long']
+        selected_variant = np.random.choice(variant_options)
+        new_ppdu_duration = PPDU_DURATION_VARIANTS[selected_variant]
+        
+        # 현재 PPDU duration 업데이트
+        self.current_ppdu_variant = selected_variant
+        self.current_ppdu_duration = new_ppdu_duration
+        
+        # 모든 STA의 PPDU duration 업데이트
+        for sta in self.stas:
+            sta.ppdu_duration = new_ppdu_duration
     
     def step(self, action: int) -> Tuple[Dict, float, bool, bool, Dict]:
         """
@@ -212,6 +272,10 @@ class NPCASemiMDPEnv(gym.Env):
         """
         if not self._is_decision_point(self.decision_sta, self.current_slot):
             raise ValueError("step() called when not at decision point!")
+        
+        # Randomize PPDU duration at each decision point (if random_env enabled)
+        if self.random_env:
+            self._update_random_ppdu_duration()
         
         sta = self.decision_sta
         start_slot = self.current_slot
@@ -271,18 +335,16 @@ class NPCASemiMDPEnv(gym.Env):
             self.current_slot += 1
             duration += 1
         
-        # Simplified reward calculation for Semi-MDP
+        # Original reward calculation (ppdu_* 모델과 동일)
         successful_transmission_slots = sta.channel_occupancy_time - initial_occupancy
         
         # 1. Base throughput reward (전송 성공한 슬롯 수에 비례)
         throughput_reward = self.throughput_weight * successful_transmission_slots
         
-        # 2. Latency penalty (전송 성공까지 소요된 총 시간에 비례)
-        # duration = 액션 시작부터 다음 결정점까지의 총 소요 시간
-        # 전송이 실패하면 다음 전송 성공까지 더 오래 걸림
+        # 2. Original latency penalty (ppdu_* 모델과 완전히 동일)
         latency_penalty = self.latency_penalty_weight * duration
         
-        # 총 보상 = 처리량 보상 - 지연 패널티
+        # 총 보상 = 처리량 보상 - 지연 패널티 (원래 공식)
         cumulative_reward = throughput_reward - latency_penalty
         
         # Check if episode is done
@@ -300,7 +362,7 @@ class NPCASemiMDPEnv(gym.Env):
             'waiting_slots': waiting_slots,
             'transmission_efficiency': successful_transmission_slots / max(duration, 1),
             'action_taken': "Stay PRIMARY" if action == 0 else "Switch to NPCA",
-            # Simplified reward components
+            # Compatible reward components
             'throughput_reward': throughput_reward,
             'latency_penalty': latency_penalty,
             'total_reward': cumulative_reward

@@ -16,7 +16,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from drl_framework.random_access import Channel
-from drl_framework.train import train_semi_mdp
+from drl_framework.train import train_semi_mdp, train_semi_mdp_with_env
 from drl_framework.configs import (
     PPDU_DURATION, 
     PPDU_DURATION_VARIANTS,
@@ -28,42 +28,55 @@ from drl_framework.configs import (
     DEFAULT_NUM_STAS
 )
 
-def create_training_config(obss_duration, ppdu_variant='medium'):
+def create_training_config(obss_duration=None, ppdu_variant='medium', random_env=False):
     """학습을 위한 설정 생성"""
     
-    # PPDU duration 설정
-    ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
-    
-    # 채널 설정 - centralized configs 사용
-    channels = [
-        Channel(channel_id=0, obss_generation_rate=OBSS_GENERATION_RATE['secondary']),  # Secondary/NPCA channel (no OBSS)
-        Channel(channel_id=1, obss_generation_rate=OBSS_GENERATION_RATE['primary'], obss_duration_range=(obss_duration, obss_duration))  # Primary channel (with OBSS)
-    ]
-    
-    # STA 설정 - PPDU duration 변형 적용
-    stas_config = []
-    
-    # Primary 채널의 STA들 (NPCA 지원) - DEFAULT_NUM_STAS개
-    for i in range(DEFAULT_NUM_STAS):
-        stas_config.append({
-            "sta_id": i,
-            "channel_id": 1,  # Primary channel
-            "npca_enabled": True,
-            "ppdu_duration": ppdu_duration,
-            "radio_transition_time": RADIO_TRANSITION_TIME
-        })
-    
-    # Secondary 채널의 STA들 (기존 방식) - DEFAULT_NUM_STAS개
-    for i in range(DEFAULT_NUM_STAS, DEFAULT_NUM_STAS * 2):
-        stas_config.append({
-            "sta_id": i,
-            "channel_id": 0,  # Secondary channel
-            "npca_enabled": False,
-            "ppdu_duration": ppdu_duration,
-            "radio_transition_time": RADIO_TRANSITION_TIME
-        })
-    
-    return channels, stas_config
+    if random_env:
+        # Random environment mode - channel and STA configs will be handled by environment
+        from drl_framework.configs import RANDOM_OBSS_DURATION_RANGE, RANDOM_PPDU_VARIANTS
+        print(f"Random environment enabled:")
+        print(f"  OBSS duration range: {RANDOM_OBSS_DURATION_RANGE}")
+        print(f"  PPDU variants: {RANDOM_PPDU_VARIANTS}")
+        
+        # Return None for channels - environment will handle randomization
+        return None, None
+    else:
+        # Fixed environment mode (backward compatibility)
+        obss_duration = obss_duration or 50  # Default value
+        
+        # PPDU duration 설정
+        ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
+        
+        # 채널 설정 - centralized configs 사용
+        channels = [
+            Channel(channel_id=0, obss_generation_rate=OBSS_GENERATION_RATE['secondary']),  # Secondary/NPCA channel (no OBSS)
+            Channel(channel_id=1, obss_generation_rate=OBSS_GENERATION_RATE['primary'], obss_duration_range=(obss_duration, obss_duration))  # Primary channel (with OBSS)
+        ]
+        
+        # STA 설정 - PPDU duration 변형 적용
+        stas_config = []
+        
+        # Primary 채널의 STA들 (NPCA 지원) - DEFAULT_NUM_STAS개
+        for i in range(DEFAULT_NUM_STAS):
+            stas_config.append({
+                "sta_id": i,
+                "channel_id": 1,  # Primary channel
+                "npca_enabled": True,
+                "ppdu_duration": ppdu_duration,
+                "radio_transition_time": RADIO_TRANSITION_TIME
+            })
+        
+        # Secondary 채널의 STA들 (기존 방식) - DEFAULT_NUM_STAS개
+        for i in range(DEFAULT_NUM_STAS, DEFAULT_NUM_STAS * 2):
+            stas_config.append({
+                "sta_id": i,
+                "channel_id": 0,  # Secondary channel
+                "npca_enabled": False,
+                "ppdu_duration": ppdu_duration,
+                "radio_transition_time": RADIO_TRANSITION_TIME
+            })
+        
+        return channels, stas_config
 
 def calculate_running_average(data, window_size):
     """주어진 데이터에 대한 이동 평균을 계산합니다."""
@@ -131,29 +144,57 @@ def plot_training_results(episode_rewards, episode_losses, save_dir="./results",
     print(f"Results saved to {save_dir}/training_results.png")
     print(f"Running averages: Rewards (window={reward_window}), Loss (window={loss_window})")
 
-def run_experiment(obss_duration, experiment_name, ppdu_variant='medium'):
-    """단일 OBSS duration 값에 대한 실험 실행"""
-    ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
-    print(f"실험 시작: {experiment_name}")
-    print(f"OBSS Duration: {obss_duration}, PPDU Duration: {ppdu_duration} ({ppdu_variant})")
+def run_experiment(obss_duration=None, experiment_name="experiment", ppdu_variant='medium', random_env=False, random_ppdu=False):
+    """실험 실행 - 고정 환경 또는 랜덤 환경 지원"""
+    
+    if random_env:
+        print(f"실험 시작: {experiment_name} (Random Environment)")
+        print("Random OBSS/PPDU variations enabled")
+    else:
+        ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
+        print(f"실험 시작: {experiment_name}")
+        print(f"OBSS Duration: {obss_duration}, PPDU Duration: {ppdu_duration} ({ppdu_variant})")
+        if random_ppdu:
+            print("PPDU Duration will be randomized during training.")
     print("-" * 50)
     
     # 설정 생성
-    channels, stas_config = create_training_config(obss_duration, ppdu_variant)
+    channels, stas_config = create_training_config(obss_duration, ppdu_variant, random_env)
     
     # 학습 파라미터 - centralized configs 사용
     num_episodes = DEFAULT_NUM_EPISODES
     num_slots_per_episode = DEFAULT_NUM_SLOTS_PER_EPISODE
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # 학습 실행
-    episode_rewards, episode_losses, learner = train_semi_mdp(
-        channels=channels,
-        stas_config=stas_config, 
-        num_episodes=num_episodes,
-        num_slots_per_episode=num_slots_per_episode,
-        device=device
-    )
+    if random_env:
+        # # Semi-MDP 환경 직접 사용 (random_env=True)
+        # from npca_semi_mdp_env import NPCASemiMDPEnv
+        
+        # # Environment 기반 학습 - 새로운 학습 함수 필요
+        # episode_rewards, episode_losses, learner = train_semi_mdp_with_env(
+        #     num_episodes=num_episodes,
+        #     num_slots_per_episode=num_slots_per_episode,
+        #     device=device,
+        #     random_env=True
+        # )
+        episode_rewards, episode_losses, learner = train_semi_mdp(
+            channels=channels,
+            stas_config=stas_config, 
+            num_episodes=num_episodes,
+            num_slots_per_episode=num_slots_per_episode,
+            device=device,
+            random_ppdu=True
+        )
+    else:
+        # 기존 방식 - 채널/STA 설정 기반
+        episode_rewards, episode_losses, learner = train_semi_mdp(
+            channels=channels,
+            stas_config=stas_config, 
+            num_episodes=num_episodes,
+            num_slots_per_episode=num_slots_per_episode,
+            device=device,
+            random_ppdu=random_ppdu
+        )
     
     # 결과 저장
     results_dir = f"./obss_comparison_results/{experiment_name}"
@@ -167,9 +208,10 @@ def run_experiment(obss_duration, experiment_name, ppdu_variant='medium'):
         'episode_rewards': episode_rewards,
         'episode_losses': episode_losses,
         'steps_done': learner.steps_done,
-        'obss_duration': obss_duration,
-        'ppdu_variant': ppdu_variant,
-        'ppdu_duration': ppdu_duration
+        'obss_duration': obss_duration if not random_env else "random",
+        'ppdu_variant': ppdu_variant if not random_env else "random",
+        'ppdu_duration': PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION) if not random_env else "random",
+        'random_env': random_env
     }, f"{results_dir}/model.pth")
     
     # 그래프 생성
@@ -333,13 +375,23 @@ def main():
     # 커맨드라인 인자 처리
     import sys
     
+    random_ppdu_flag = '--random-ppdu' in sys.argv
+    if random_ppdu_flag:
+        sys.argv.remove('--random-ppdu')
+        print("Random PPDU duration enabled.")
+
     # 실험 모드 결정
     run_mode = 'single'  # 기본값: 단일 실험
-    obss_duration = 50
+    obss_duration = 100
     ppdu_variant = 'medium'
+    random_env = False  # 랜덤 환경 모드
     
     if len(sys.argv) > 1:
-        if sys.argv[1] == 'ppdu_experiments':
+        if sys.argv[1] == '--random-env':
+            random_env = True
+            run_mode = 'single'
+            print("Random environment mode enabled")
+        elif sys.argv[1] == 'ppdu_experiments':
             run_mode = 'ppdu_experiments'
             if len(sys.argv) > 2:
                 try:
@@ -376,12 +428,20 @@ def main():
         
     else:
         # 단일 실험 실행
-        print(f"OBSS Duration: {obss_duration} slots")
-        print(f"PPDU Variant: {ppdu_variant}")
+        if random_env:
+            experiment_name = "random_env_robust_model"
+            print("Random environment training enabled")
+        else:
+            print(f"OBSS Duration: {obss_duration} slots")
+            if random_ppdu_flag:
+                ppdu_naming = "random"
+            else:
+                ppdu_naming = ppdu_variant
+            print(f"PPDU Variant: {ppdu_naming}")
+            experiment_name = f"ppdu_{ppdu_naming}_obss_{obss_duration}"
         print()
         
-        experiment_name = f"ppdu_{ppdu_variant}_obss_{obss_duration}"
-        result = run_experiment(obss_duration, experiment_name, ppdu_variant)
+        result = run_experiment(obss_duration, experiment_name, ppdu_variant, random_env, random_ppdu=random_ppdu_flag)
         
         # 결과 출력
         print("\n" + "="*60)
@@ -403,6 +463,7 @@ def main():
         print("\n다음 단계:")
         print("python comparison_test.py 를 실행하여 훈련된 모델과 베이스라인을 비교하세요.")
         print("="*60)
+
 
 if __name__ == "__main__":
     main()
