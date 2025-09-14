@@ -15,6 +15,7 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 from drl_framework.random_access import Channel
 from drl_framework.train import train_semi_mdp, train_semi_mdp_with_env
 from drl_framework.configs import (
@@ -25,7 +26,8 @@ from drl_framework.configs import (
     OBSS_DURATION_RANGE,
     DEFAULT_NUM_EPISODES,
     DEFAULT_NUM_SLOTS_PER_EPISODE,
-    DEFAULT_NUM_STAS
+    DEFAULT_NUM_STAS_CH0,
+    DEFAULT_NUM_STAS_CH1,
 )
 
 def create_training_config(obss_duration=None, ppdu_variant='medium', random_env=False):
@@ -55,19 +57,9 @@ def create_training_config(obss_duration=None, ppdu_variant='medium', random_env
         
         # STA 설정 - PPDU duration 변형 적용
         stas_config = []
-        
-        # Primary 채널의 STA들 (NPCA 지원) - DEFAULT_NUM_STAS개
-        for i in range(DEFAULT_NUM_STAS):
-            stas_config.append({
-                "sta_id": i,
-                "channel_id": 1,  # Primary channel
-                "npca_enabled": True,
-                "ppdu_duration": ppdu_duration,
-                "radio_transition_time": RADIO_TRANSITION_TIME
-            })
-        
-        # Secondary 채널의 STA들 (기존 방식) - DEFAULT_NUM_STAS개
-        for i in range(DEFAULT_NUM_STAS, DEFAULT_NUM_STAS * 2):
+
+        # Secondary 채널의 STA들 (기존 방식) - DEFAULT_NUM_STAS_CH0개
+        for i in range(DEFAULT_NUM_STAS_CH0):
             stas_config.append({
                 "sta_id": i,
                 "channel_id": 0,  # Secondary channel
@@ -76,6 +68,16 @@ def create_training_config(obss_duration=None, ppdu_variant='medium', random_env
                 "radio_transition_time": RADIO_TRANSITION_TIME
             })
         
+        # Primary 채널의 STA들 (NPCA 지원) - DEFAULT_NUM_STAS_CH1개
+        for i in range(DEFAULT_NUM_STAS_CH1):
+            stas_config.append({
+                "sta_id": i,
+                "channel_id": 1,  # Primary channel
+                "npca_enabled": True,
+                "ppdu_duration": ppdu_duration,
+                "radio_transition_time": RADIO_TRANSITION_TIME
+            })
+
         return channels, stas_config
 
 def calculate_running_average(data, window_size):
@@ -154,6 +156,7 @@ def run_experiment(obss_duration=None, experiment_name="experiment", ppdu_varian
         ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
         print(f"실험 시작: {experiment_name}")
         print(f"OBSS Duration: {obss_duration}, PPDU Duration: {ppdu_duration} ({ppdu_variant})")
+        print(f"STA Density: CH0={DEFAULT_NUM_STAS_CH0} STAs, CH1={DEFAULT_NUM_STAS_CH1} STAs")
         if random_ppdu:
             print("PPDU Duration will be randomized during training.")
     print("-" * 50)
@@ -193,11 +196,11 @@ def run_experiment(obss_duration=None, experiment_name="experiment", ppdu_varian
             num_episodes=num_episodes,
             num_slots_per_episode=num_slots_per_episode,
             device=device,
-            random_ppdu=random_ppdu
+            random_ppdu=False
         )
     
     # 결과 저장
-    results_dir = f"./obss_comparison_results/{experiment_name}"
+    results_dir = f"./density_comparison_results/{experiment_name}"
     os.makedirs(results_dir, exist_ok=True)
     
     # 학습된 모델 저장
@@ -334,7 +337,7 @@ def plot_comparison_results(experiment_results):
     plt.tight_layout()
     
     # 저장
-    comparison_dir = "./obss_comparison_results"
+    comparison_dir = "./density_comparison_results"
     plt.savefig(f"{comparison_dir}/obss_duration_comparison.png", dpi=300, bbox_inches='tight')
     plt.show()
     
@@ -373,96 +376,96 @@ def main():
     print("="*60)
     
     # 커맨드라인 인자 처리
-    import sys
+    parser = argparse.ArgumentParser(description='Semi-MDP 기반 NPCA STA 학습 - STA Density 실험')
     
-    random_ppdu_flag = '--random-ppdu' in sys.argv
+    # Boolean flags - 현재 사용하지 않는 옵션들 (고정 설정)
+    # parser.add_argument('--random-ppdu', action='store_true', default=True,
+    #                     help='PPDU duration을 랜덤화 (기본값: True)')
+    # parser.add_argument('--no-random-ppdu', dest='random_ppdu', action='store_false',
+    #                     help='PPDU duration 랜덤화 비활성화')
+    # parser.add_argument('--random-env', action='store_true', default=False,
+    #                     help='랜덤 환경 모드 활성화')
+    
+    # Value arguments - 현재 사용하지 않는 옵션들 (고정 설정)
+    # parser.add_argument('--obss-duration', type=int, default=100,
+    #                     help='OBSS duration (slots, 기본값: 100)')
+    # parser.add_argument('--ppdu-variant', choices=list(PPDU_DURATION_VARIANTS.keys()), 
+    #                     default='medium', help='PPDU duration 변형 (기본값: medium)')
+    # parser.add_argument('--mode', choices=['single', 'ppdu_experiments'], default='single',
+    #                     help='실행 모드 (기본값: single)')
+    
+    # args = parser.parse_args()
+    
+    # 고정 설정값들 (STA density 실험용)
+    random_ppdu_flag = True      # 항상 랜덤 PPDU 사용
+    random_env = False           # 고정 환경 사용
+    obss_duration = 100          # OBSS duration 고정
+    ppdu_variant = 'medium'      # PPDU variant 고정 (랜덤이므로 실제로는 사용되지 않음)
+    run_mode = 'single'          # 단일 실험 모드
+    
     if random_ppdu_flag:
-        sys.argv.remove('--random-ppdu')
         print("Random PPDU duration enabled.")
-
-    # 실험 모드 결정
-    run_mode = 'single'  # 기본값: 단일 실험
-    obss_duration = 100
-    ppdu_variant = 'medium'
-    random_env = False  # 랜덤 환경 모드
-    
-    if len(sys.argv) > 1:
-        if sys.argv[1] == '--random-env':
-            random_env = True
-            run_mode = 'single'
-            print("Random environment mode enabled")
-        elif sys.argv[1] == 'ppdu_experiments':
-            run_mode = 'ppdu_experiments'
-            if len(sys.argv) > 2:
-                try:
-                    obss_duration = int(sys.argv[2])
-                except ValueError:
-                    print("잘못된 OBSS duration 값입니다. 기본값(100)을 사용합니다.")
-        else:
-            try:
-                obss_duration = int(sys.argv[1])
-                if len(sys.argv) > 2:
-                    ppdu_variant = sys.argv[2]
-                    if ppdu_variant not in PPDU_DURATION_VARIANTS:
-                        print(f"잘못된 PPDU variant입니다. 사용 가능한 값: {list(PPDU_DURATION_VARIANTS.keys())}")
-                        ppdu_variant = 'medium'
-            except ValueError:
-                print("잘못된 OBSS duration 값입니다. 기본값(50)을 사용합니다.")
+    if random_env:
+        print("Random environment mode enabled")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     
-    if run_mode == 'ppdu_experiments':
-        # PPDU duration 변인통제 실험
-        results = run_ppdu_experiments(obss_duration)
-        
-        print("\n" + "="*70)
-        print("PPDU Duration 실험 결과 요약")
-        print("="*70)
-        for result in results:
-            variant = result['ppdu_variant']
-            ppdu_dur = PPDU_DURATION_VARIANTS[variant]
-            print(f"{variant:12} ({ppdu_dur:2d} slots): 평균 보상 {result['final_avg_reward']:6.2f}, "
-                  f"최대 보상 {result['max_reward']:6.2f}")
-        print("="*70)
-        
+    # PPDU experiments mode는 현재 사용하지 않음 (STA density 실험에 집중)
+    # if run_mode == 'ppdu_experiments':
+    #     # PPDU duration 변인통제 실험
+    #     results = run_ppdu_experiments(obss_duration)
+    #     
+    #     print("\n" + "="*70)
+    #     print("PPDU Duration 실험 결과 요약")
+    #     print("="*70)
+    #     for result in results:
+    #         variant = result['ppdu_variant']
+    #         ppdu_dur = PPDU_DURATION_VARIANTS[variant]
+    #         print(f"{variant:12} ({ppdu_dur:2d} slots): 평균 보상 {result['final_avg_reward']:6.2f}, "
+    #               f"최대 보상 {result['max_reward']:6.2f}")
+    #     print("="*70)
+    #     
+    # else:
+    
+    # STA Density 실험 실행
+    if random_env:
+        experiment_name = "random_env_robust_model"
+        print("Random environment training enabled")
     else:
-        # 단일 실험 실행
-        if random_env:
-            experiment_name = "random_env_robust_model"
-            print("Random environment training enabled")
+        print(f"OBSS Duration: {obss_duration} slots")
+        if random_ppdu_flag:
+            ppdu_naming = "random"
         else:
-            print(f"OBSS Duration: {obss_duration} slots")
-            if random_ppdu_flag:
-                ppdu_naming = "random"
-            else:
-                ppdu_naming = ppdu_variant
-            print(f"PPDU Variant: {ppdu_naming}")
-            experiment_name = f"ppdu_{ppdu_naming}_obss_{obss_duration}"
-        print()
-        
-        result = run_experiment(obss_duration, experiment_name, ppdu_variant, random_env, random_ppdu=random_ppdu_flag)
-        
-        # 결과 출력
-        print("\n" + "="*60)
-        print("DRL 모델 훈련 완료!")
-        print("="*60)
-        print("훈련 결과:")
-        print("-" * 40)
-        print(f"OBSS Duration: {result['obss_duration']} slots")
-        print(f"PPDU Variant: {ppdu_variant}")
-        print(f"최종 평균 보상 (최근 50 에피소드): {result['final_avg_reward']:.2f}")
-        print(f"최대 보상: {result['max_reward']:.2f}")
-        print(f"총 학습 스텝: {result['steps_done']}")
-        
-        # 저장 위치 안내
-        results_dir = f"./obss_comparison_results/{experiment_name}"
-        print(f"\n모델 저장 위치: {results_dir}/model.pth")
-        print(f"훈련 그래프: {results_dir}/training_results.png")
-        
-        print("\n다음 단계:")
-        print("python comparison_test.py 를 실행하여 훈련된 모델과 베이스라인을 비교하세요.")
-        print("="*60)
+            ppdu_naming = ppdu_variant
+        print(f"PPDU Variant: {ppdu_naming}")
+        print(f"STA Configuration: CH0={DEFAULT_NUM_STAS_CH0}, CH1={DEFAULT_NUM_STAS_CH1}")
+        experiment_name = f"ch0_{DEFAULT_NUM_STAS_CH0}_ch1_{DEFAULT_NUM_STAS_CH1}"
+    print()
+    
+    result = run_experiment(obss_duration, experiment_name, ppdu_variant, random_env, random_ppdu=random_ppdu_flag)
+    
+    # 결과 출력
+    print("\n" + "="*60)
+    print("DRL 모델 훈련 완료!")
+    print("="*60)
+    print("훈련 결과:")
+    print("-" * 40)
+    print(f"OBSS Duration: {result['obss_duration']} slots")
+    print(f"PPDU Variant: {ppdu_variant}")
+    print(f"STA Density: CH0={DEFAULT_NUM_STAS_CH0}, CH1={DEFAULT_NUM_STAS_CH1}")
+    print(f"최종 평균 보상 (최근 50 에피소드): {result['final_avg_reward']:.2f}")
+    print(f"최대 보상: {result['max_reward']:.2f}")
+    print(f"총 학습 스텝: {result['steps_done']}")
+    
+    # 저장 위치 안내
+    results_dir = f"./density_comparison_results/{experiment_name}"
+    print(f"\n모델 저장 위치: {results_dir}/model.pth")
+    print(f"훈련 그래프: {results_dir}/training_results.png")
+    
+    print("\n다음 단계:")
+    print("python comparison_test.py 를 실행하여 훈련된 모델과 베이스라인을 비교하세요.")
+    print("="*60)
 
 
 if __name__ == "__main__":

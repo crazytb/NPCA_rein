@@ -324,14 +324,13 @@ class STA:
             self.tx_remaining -= 1
 
         if self.tx_remaining == 0:
+            self._end_option()  # Move before success/collision handling
+            
             if self.tx_success:
                 self.channel_occupancy_time += self.current_tx_duration
-                
-            if self.tx_success:
                 self.handle_success()
             else:
                 self.handle_collision()
-            self._end_option()
 
     def _handle_npca_backoff(self, slot: int):
         if self.npca_channel.is_busy(slot):
@@ -364,21 +363,16 @@ class STA:
             return
 
         if self.tx_remaining == 0:
-            if hasattr(self, 'tx_success') and self.tx_success:
+            self._end_option()  # Move before success/collision handling
+            
+            if self.tx_success:
                 self.channel_occupancy_time += self.current_tx_duration
-            
-            self.current_obss = None
-            
-            if hasattr(self, 'tx_success') and self.tx_success:
                 self.handle_success()
             else:
                 self.handle_collision()
             
-            if self.primary_channel.obss_remain == 0:
-                self.next_state = STAState.PRIMARY_BACKOFF
-            else:
-                self.next_state = STAState.NPCA_BACKOFF
-            self._end_option()
+            self.current_obss = None
+            self.next_state = STAState.PRIMARY_BACKOFF
             return
         
     def _begin_option(self, s_dict, a_int):
@@ -393,9 +387,15 @@ class STA:
     def _end_option(self):
         if self._opt_active:
             throughput_weight = 1.0
-            latency_penalty_weight = 0.1
-            successful_transmission_slots = self.channel_occupancy_time - self._initial_occupancy_time
-            throughput_reward = throughput_weight * successful_transmission_slots
+            latency_penalty_weight = 0.05
+            
+            # Reward based on actual successful transmission, regardless of action
+            if hasattr(self, 'tx_success') and self.tx_success:
+                attempted_transmission_slots = self.current_tx_duration
+            else:
+                attempted_transmission_slots = 0
+                
+            throughput_reward = throughput_weight * attempted_transmission_slots
             latency_penalty = latency_penalty_weight * self._opt_tau
             cumulative_reward = throughput_reward - latency_penalty
             self.new_episode_reward += cumulative_reward

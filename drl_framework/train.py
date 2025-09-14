@@ -273,7 +273,8 @@ def train_semi_mdp(channels, stas_config, num_episodes=100, num_slots_per_episod
                 total_reward += sta.new_episode_reward
             sta.new_episode_reward = 0.0 # Reset for next episode
         
-        normalized_reward = total_reward / num_slots_per_episode
+        # normalized_reward = total_reward / num_slots_per_episode
+        normalized_reward = total_reward
         episode_rewards.append(normalized_reward)
         
         # 학습 수행 - 빈도 증가로 학습 속도 개선
