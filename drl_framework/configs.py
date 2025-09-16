@@ -1,7 +1,7 @@
 import copy
 
 # === Core Simulation Parameters ===
-simulation_time = 1_000  # Total simulation time in us
+simulation_time = 5_000  # Total simulation time in us
 simulation_slot = simulation_time // 9  # Slot duration in us (9us for 802.11ax)
 
 # === Frame and Transmission Parameters ===
@@ -41,9 +41,9 @@ OBSS_DURATION_RANGE = {
 
 # === Training Parameters ===
 DEFAULT_NUM_EPISODES = 1000  # Increased for better learning and random env convergence
-DEFAULT_NUM_SLOTS_PER_EPISODE = 3000  # Increased for more decisions per episode
+DEFAULT_NUM_SLOTS_PER_EPISODE = int(100_000/9)  # Increased for more decisions per episode
 DEFAULT_NUM_STAS_CH0 = 10  # Default number of STAs in secondary channel
-DEFAULT_NUM_STAS_CH1 = 20  # Default number of STAs in primary channel
+DEFAULT_NUM_STAS_CH1 = 10  # Default number of STAs in primary channel
 
 # === Random Environment Parameters ===
 RANDOM_OBSS_DURATION_RANGE = (20, 200)  # Random OBSS duration range for robust training
