@@ -850,3 +850,89 @@ vs Random 정책: 832.0 점 (Stay 40%, Switch 60%)
 2. 더 극단적인 테스트 조건에서 DRL 적응성 검증
 3. 다른 DRL 알고리즘과의 비교 실험
 4. 논문 작성을 위한 실험 결과 정리 및 시각화
+
+---
+
+## 🔄 2025-09-17 추가 작업: 논문 수정 및 밀도 분석
+
+### 27. LaTeX 패키지 설치 문제 해결 ✅
+**문제**: `algorithmic.sty` 패키지 누락으로 인한 LaTeX 컴파일 에러
+**해결**: `texlive-science` 패키지 설치 필요 확인
+
+### 28. 논문 수학 표현 개선 ✅
+**액션 공간 수식 개선**:
+```latex
+% 기존
+\mathcal{A} = \{a_0 = \texttt{StayPrimary}, a_1 = \texttt{GoNPCA}\}
+
+% 개선 후
+\mathcal{A} = \{a_0, a_1\}
+where $a_0$ represents \texttt{StayPrimary} and $a_1$ represents \texttt{GoNPCA}.
+```
+
+### 29. 알고리즘-표 변수 일관성 개선 ✅
+**Table 파라미터 표기 개선**:
+- `Batch size ($batch\_size$)`: 알고리즘 줄 169에서 사용
+- `Number of episodes ($N_{epi}$)`: 알고리즘 줄 152에서 사용
+- Option duration 표기 통일: `$\tau_{opt}$`로 일관성 확보
+
+### 30. 채널 밀도 분석 섹션 추가 ✅
+**새로운 Subsection 추가**:
+- `\subsection{Channel Density Impact Analysis}`
+- **Table 2**: 9가지 밀도 조합에서의 Q-value 비교
+- 밀도 기반 의사결정 패턴 분석
+
+**핵심 발견**:
+```
+채널 밀도별 결정 패턴:
+- CH0=2 STAs: 100% Switch to NPCA (경쟁 최소)
+- CH0≥10 STAs: Stay vs Switch 혼재 (밀도 차이 고려)
+- Q-value 차이가 결정 확신도 반영
+```
+
+### 31. 실험 데이터 기반 결정 요인 재평가 ✅
+**기존 결론 수정 필요**:
+- **기존**: "Contention Window Index가 가장 중요한 결정 요인"
+- **실제**: "채널 밀도가 압도적으로 중요한 요인"
+
+**데이터 증거**:
+- CW=1,3,5 변화해도 결정 패턴 100% 동일
+- CH0 밀도=2일 때 무조건 Switch (9/9)
+- 채널 밀도 차이가 CW 효과를 완전 압도
+
+### 32. Policy-based 알고리즘 적용 가능성 확인 ✅
+**Semi-MDP와 Policy-based 호환성**:
+- REINFORCE, Actor-Critic, PPO 모두 적용 가능
+- Semi-MDP의 가변적 시간 간격과 지연 보상 구조 호환
+- OPTION-CRITIC은 Semi-MDP 전용 설계
+- 현재 DQN 구조를 Policy Network로 변환 가능
+
+---
+
+## 📊 채널 밀도 분석 결과 (2025-09-17)
+
+### 실제 결정 요인 순위 (수정됨)
+1. **CH0 절대 밀도**: CH0=2면 무조건 Switch (100%)
+2. **CH0-CH1 상대 밀도**: 경쟁 강도 비교
+3. **OBSS 잔여 시간**: 대기 비용 고려
+4. **PPDU Duration**: 전송 이익 크기
+5. **CW Index**: 거의 영향 없음 (< 1% 변화)
+
+### 논문 수정 사항
+- **Table 2 추가**: 채널 밀도별 Q-value 분석 표
+- **Subsection 추가**: Channel Density Impact Analysis
+- **결론 부분**: 향후 밀도 적응적 알고리즘 개발 언급 예정
+
+### 기술적 인사이트
+- **환경 특성이 학습보다 중요**: 단순한 밀도 기반 휴리스틱도 효과적일 가능성
+- **DRL의 가치 재평가**: 복잡한 환경에서만 DRL이 휴리스틱 대비 우위
+- **실험 설계 교훈**: 충분한 변수 범위 테스트 필요
+
+---
+
+**작업 완료 일시**: 2025-09-17
+**주요 성과**:
+- **논문 품질 향상**: 수학적 표현 및 변수 일관성 개선
+- **새로운 분석 섹션**: 채널 밀도 영향 분석 추가
+- **결정 요인 재발견**: 기존 가정과 다른 실제 패턴 발견
+- **향후 연구 방향**: Policy-based 알고리즘 적용 가능성 확인

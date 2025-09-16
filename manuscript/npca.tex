@@ -42,11 +42,11 @@ Modern wireless networks face increasing challenges in spectrum efficiency as Wi
 
 IEEE 802.11 systems traditionally require the primary channel to be idle before wide-band transmissions can occur \cite{wei2024non}. This constraint leads to significant spectrum waste when secondary channels remain unused despite primary channel occupancy by overlapping BSS (OBSS) traffic. While IEEE 802.11bn introduces non-primary channel access (NPCA) capability \cite{bellalta2025performance}, existing approaches rely on static heuristics that cannot adapt to dynamic network conditions, leaving a critical gap in intelligent decision-making strategies.
 
-Consider a scenario where a station detects OBSS activity on its primary channel while secondary channels are available. The station must decide whether to wait for primary channel access or switch to NPCA, balancing factors such as transmission duration, channel switching overhead, and future network conditions. Such decisions require adaptive intelligence beyond static rules.
+Consider a scenario where a station detects OBSS activity on its primary channel while secondary channels are available. The station must decide whether to wait for primary channel access or switch to NPCA, balancing factors such as transmission duration, channel switching overhead, and future network conditions. Such decisions require adaptive intelligence beyond static rules. 
 
 In this paper, we describe an intelligent NPCA decision-making framework that enables stations to learn optimal channel access policies through interaction with dynamic network environments. We formulate this as an online learning problem where stations adapt their behavior based on observed network states and reward feedback.
 
-Our approach employs deep reinforcement learning, specifically a Semi-Markov Decision Process (Semi-MDP) formulation with Deep Q-Network (DQN) \cite{mnih2015human}, to capture temporal dependencies in NPCA decisions. The framework enables stations to learn from experience and adapt to varying OBSS patterns and network densities.
+Our approach employs deep reinforcement learning, specifically a Semi-Markov Decision Process (Semi-MDP) formulation with Deep Q-Network (DQN) \cite{mnih2013playing, mnih2015human}, to capture temporal dependencies in NPCA decisions. The framework enables stations to learn from experience and adapt to varying OBSS patterns and network densities.
 
 The main contributions of this work are:
 \begin{itemize}
@@ -102,9 +102,10 @@ State observations occur at specific decision epochs when the STA is in the \tex
 The action space $\mathcal{A}$ is discrete and binary, representing the fundamental NPCA decision:
 
 \begin{equation}
-\mathcal{A} = \{a_0, a_1\} = \{\text{StayPrimary}, \text{GoNPCA}\}
+\mathcal{A} = \{a_0, a_1\}
 \label{eq:action_space}
 \end{equation}
+where $a_0$ represents \texttt{StayPrimary} and $a_1$ represents \texttt{GoNPCA}.
 
 The semantic meaning of each action is:
 
@@ -122,12 +123,12 @@ The reward function implements a delayed reward mechanism that evaluates both th
 The option reward is defined as:
 
 \begin{equation}
-R_{option} = w_t \cdot L_{tx} \cdot \mathbb{I}_{success} - w_l \cdot \tau_{option}
+R_{opt} = w_t \cdot L_{tx} \cdot \mathbb{I}_{success} - w_l \cdot \tau_{opt}
 \label{eq:reward_function}
 \end{equation}
-where $w_t = 0.95$ is the throughput weight, $L_{tx}$ represents the attempted transmission duration in slots, $\mathbb{I}_{success}$ is an indicator function equal to 1 if the transmission is successful, $w_l = 0.05$ is the latency penalty weight, and $\tau_{option}$ is the total option duration in slots.
+where $w_t$ is the throughput weight, $L_{tx}$ represents the attempted transmission duration in slots, $\mathbb{I}_{success}$ is an indicator function equal to 1 if the transmission is successful, $w_l$ is the latency penalty weight, and $\tau_{opt}$ is the total option duration in slots.
 
-The success criteria are defined as follows: for primary channel transmissions, success requires no OBSS interference during the entire transmission duration; for NPCA transmissions, success is defined as the absence of intra-BSS collisions. This reward structure balances throughput maximization with latency minimization, encouraging the agent to make efficient channel access decisions while considering temporal overhead in dense WLAN environments.
+The success criteria are defined as the canonical conditions for IEEE 802.11 EDCA. This reward structure balances throughput maximization with latency minimization, encouraging the agent to make efficient channel access decisions while considering temporal overhead in dense WLAN environments.
 
 \section{Proposed DRL Framework}
 
@@ -135,7 +136,7 @@ This section describes the deep reinforcement learning framework for solving the
 
 \subsection{Semi-MDP Learner Architecture}
 
-Our \texttt{SemiMDPLearner} class implements a DQN-based learning algorithm with experience replay and target network stabilization. The neural network architecture consists of three fully connected layers (128, 128, 64 neurons) with ReLU activations and dropout regularization, mapping normalized state observations to Q-values for each action.
+Our \texttt{SemiMDPLearner} class implements a DQN-based learning algorithm with experience replay and target network stabilization with Semi-MDP consideration. The neural network architecture consists of three fully connected layers (128, 128, 64 neurons) with ReLU activations and dropout regularization, mapping normalized state observations to Q-values for each action.
 
 The key components include policy network $Q(s,a;\theta)$ for action-value estimation, target network $\hat{Q}(s,a;\hat{\theta})$ for stable learning targets, experience replay memory $\mathcal{D}$ with capacity 10,000 transitions, and Semi-MDP specific transition structure $(s, a, s', R, \tau, done)$, where $\tau$ represents the option duration in slots.
 
@@ -148,9 +149,9 @@ The algorithm initializes the DQN components and iteratively runs episodes of in
 \label{alg:semi_mdp_npca}
 \begin{algorithmic}[1]
 \STATE Initialize $Q(s,a;\theta)$, target network $\hat{Q}(s,a;\hat{\theta})$, and replay memory $\mathcal{D}$
-\FOR{$episode = 1$ to $N_{episodes}$}
+\FOR{$epi = 1$ to $N_{epi}$}
     \STATE Reset environment and initialize option variables
-    \FOR{$slot = 0$ to $T_{episode}-1$}
+    \FOR{$slot = 0$ to $T_{epi}-1$}
         \STATE Advance simulation to next decision point
         \IF{decision point reached}
             \STATE Observe and normalize state $\tilde{s}_t$ 
@@ -158,18 +159,18 @@ The algorithm initializes the DQN components and iteratively runs episodes of in
                 \STATE Store transition in $\mathcal{D}$
             \ENDIF
             \STATE Select action $a_t$ using $\epsilon$-greedy with $Q(\tilde{s}_t, a; \theta)$
-            \STATE Begin new option: $(s_{option}, a_{option}) \leftarrow (\tilde{s}_t, a_t)$
+            \STATE Begin new option: $(s_{opt}, a_{opt}) \leftarrow (\tilde{s}_t, a_t)$
         \ENDIF
-        \STATE Execute step and accumulate option duration $\tau_{option}$
+        \STATE Execute step and accumulate option duration $\tau_{opt}$
         \IF{option terminates}
-            \STATE Calculate option reward $R_{option}$
+            \STATE Calculate option reward $R_{opt}$
             \STATE Set pending transition
         \ENDIF
         \IF{$|\mathcal{D}| \geq batch\_size$}
             \STATE Sample mini-batch from $\mathcal{D}$
             \STATE Compute TD targets: \\ 
                 \IF{not done}
-                    \STATE $y_i = R_i + \gamma^{\tau_i} \max_{a'} \hat{Q}(s'_i, a'; \hat{\theta})$
+                    \STATE $y_i = R_i + \gamma^{\tau_{opt}} \max_{a'} \hat{Q}(s'_i, a'; \hat{\theta})$
                 \ELSE
                     \STATE $y_i = R_i$
                 \ENDIF
@@ -208,15 +209,13 @@ The DQN implementation uses a three-layer neural network (128, 128, 64 neurons) 
 \multicolumn{2}{|c|}{\textbf{Simulation Environment}} \\
 \hline
 Slot duration & 9 $\mu$s \\
+Episode duration & 100 $ms$ (Typical beacon interval) \\
 Number of channels & 2 $\times$ 20 MHz \\
 STAs per channel & 2, 10, or 20 \\
-% Frame duration (Short) & 20 slots (180 $\mu$s) \\
-% Frame duration (Medium) & 33 slots (297 $\mu$s) \\
-% Frame duration (Long) & 50 slots (450 $\mu$s) \\
-Frame duration & 10 -- 200 slots \\
-OBSS generation rate & 0.01 per slot if idle \\
-OBSS duration variants & 100 slots \\
-NPCA switching delay & 1 slot (9 $\mu$s) \\
+PPDU duration & 10 -- 200 slots \\
+OBSS generation rate & 0.01 per slot if the channel is idle \\
+OBSS duration & 100 slots \\
+NPCA switching delay & 1 slot \\
 \hline
 \multicolumn{2}{|c|}{\textbf{DQN Network Architecture}} \\
 \hline
@@ -228,12 +227,12 @@ Dropout rate & 0.1 \\
 \hline
 \multicolumn{2}{|c|}{\textbf{Training Parameters}} \\
 \hline
-Learning rate ($\alpha$) & $1 \times 10^{-4}$ \\
-Discount factor ($\gamma$) & 0.99 \\
-Batch size & 128 \\
-Replay memory capacity & 10,000 \\
-Target network update ($\tau_{target}$) & 0.005 \\
-Number of episodes & 1,000 \\
+Learning rate, $\alpha$ & $1 \times 10^{-4}$ \\
+Discount factor, $\gamma$ & 0.99 \\
+Batch size, $batch\_size$ & 128 \\
+Replay memory capacity, $|\mathcal{D}|$ & 10,000 \\
+Target network update, $\tau$ & 0.005 \\
+Number of episodes, $N_{epi}$ & 1,000 \\
 % Slots per episode & 11,111 \\
 \hline
 \multicolumn{2}{|c|}{\textbf{Exploration Strategy}} \\
@@ -250,13 +249,45 @@ $\epsilon_{decay}$ & 1,000 steps \\
 
 \subsection{Training Convergence}
 
-Figure~\ref{fig:training_convergence} demonstrates that our DRL algorithm achieves stable convergence across different network density scenarios. The training curves show consistent improvement in episode rewards, with the algorithm reaching stable performance within 400-600 episodes. The learning process exhibits smooth convergence without significant oscillations, indicating robust policy optimization under varying PPDU durations and network conditions.
+Figure~\ref{fig:training_convergence} demonstrates that our DRL algorithm achieves stable convergence across different network density scenarios. The training curves show consistent improvement in episode rewards, with the algorithm reaching stable performance within 400--600 episodes. The learning process exhibits smooth convergence without significant oscillations, indicating robust policy optimization under varying PPDU durations and network conditions.
 
 \subsection{Performance Analysis}
 
-Results demonstrate that the DRL-based approach achieves superior performance compared to static strategies. Across different network scenarios, our method shows significant throughput improvement over baseline approaches including primary-only and NPCA-only strategies. The learning algorithm effectively adapts to varying OBSS patterns and channel conditions, demonstrating the effectiveness of the Semi-MDP formulation for temporal decision-making in wireless networks.
+Results demonstrate that the DRL-based approach achieves superior performance compared to static strategies. Across different network scenarios, our method shows significant throughput improvement over baseline approaches including primary-only, NPCA-only, and random strategies. The learning algorithm effectively adapts to varying OBSS patterns and channel conditions, demonstrating the effectiveness of the Semi-MDP formulation for temporal decision-making in wireless networks.
 
 Analysis reveals that contention window index serves as the most critical decision factor, followed by OBSS occupation time. The learned policy exhibits conservative behavior, favoring long-term stability over aggressive short-term gains.
+
+\subsection{Channel Density Impact Analysis}
+
+To understand the influence of channel density on NPCA decision-making, we analyze Q-values across different network density configurations. Table~\ref{tab:density_qvalues} presents the Q-values for \texttt{StayPrimary} and \texttt{GoNPCA} actions under representative network conditions with varying STA densities.
+
+\begin{table}[htbp]
+\caption{Q-values by Channel Density Configuration}
+\begin{center}
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+\textbf{CH0 STAs} & \textbf{CH1 STAs} & \textbf{Decision} & \textbf{Q\_Stay} & \textbf{Q\_Switch} & \textbf{Q\_Diff} \\
+\hline
+\multicolumn{6}{|c|}{\textbf{Test Scenario: OBSS=30, Radio=1, PPDU=33, CW=1}} \\
+\hline
+2 & 2 & Switch & -1.127 & 1.924 & -3.051 \\
+2 & 10 & Switch & 0.275 & 1.729 & -1.454 \\
+2 & 20 & Switch & 2.332 & 2.730 & -0.398 \\
+10 & 2 & Stay & 2.712 & -2.033 & 4.745 \\
+10 & 10 & Switch & -3.777 & -2.474 & -1.303 \\
+10 & 20 & Stay & 0.630 & -1.363 & 1.993 \\
+20 & 2 & Switch & 0.104 & 2.841 & -2.737 \\
+20 & 10 & Stay & 0.158 & -0.801 & 0.959 \\
+20 & 20 & Switch & -0.690 & 0.902 & -1.592 \\
+\hline
+\end{tabular}
+\label{tab:density_qvalues}
+\end{center}
+\end{table}
+
+The analysis reveals that channel density configuration significantly influences NPCA decision-making patterns. Models consistently choose to switch to NPCA when Channel 0 (NPCA) has low STA density (2 STAs), regardless of Channel 1 density, indicating that low competition environments strongly favor channel switching. Conversely, when Channel 0 density is moderate to high (10-20 STAs), the decision becomes more nuanced, with the algorithm weighing the relative density difference between channels.
+
+Notably, the Q-value differences show clear decision boundaries: negative Q\_Diff values (Q\_Stay < Q\_Switch) consistently lead to NPCA switching, while positive values result in staying on the primary channel. The magnitude of Q\_Diff reflects decision confidence, with larger absolute values indicating stronger preference for the selected action.
 
 \section{Conclusion and Future Work}
 
