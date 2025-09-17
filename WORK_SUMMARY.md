@@ -936,3 +936,115 @@ where $a_0$ represents \texttt{StayPrimary} and $a_1$ represents \texttt{GoNPCA}
 - **새로운 분석 섹션**: 채널 밀도 영향 분석 추가
 - **결정 요인 재발견**: 기존 가정과 다른 실제 패턴 발견
 - **향후 연구 방향**: Policy-based 알고리즘 적용 가능성 확인
+
+---
+
+## 🔄 2025-09-18 추가 작업: 논문 최종 정리 및 AI 생성 패턴 개선
+
+### 33. 논문 한계점 및 Future Work 섹션 보완 ✅
+**목적**: 논문의 신뢰성 및 학술적 깊이 향상
+
+**추가된 한계점**:
+- **고정된 네트워크 토폴로지**: 실제 환경의 동적 STA 참여/탈퇴 미반영
+- **단일 에이전트 학습**: Multi-agent 상호작용 미고려
+- **일반화 성능 한계**: 특정 밀도/트래픽 패턴에서 훈련된 모델의 적용 범위
+
+**Future Work 방향**:
+- Multi-agent 시나리오로의 프레임워크 확장
+- 동적 네트워크 토폴로지 적응 메커니즘 개발
+- 복잡한 네트워크 성능 목표를 위한 정교한 보상 구조 탐색
+
+### 34. Introduction과 Related Work 통합 ✅
+**구조 개선**: 4페이지 제한에 맞춘 논문 구조 최적화
+- 중복 내용 제거하고 자연스러운 문단 흐름으로 통합
+- Related Work를 Introduction 내에 포함하여 공간 절약
+- 논리적 순서: 문제 정의 → 기존 연구 한계 → 제안 방법
+
+### 35. AI 생성 패턴 개선 ✅
+**식별된 AI 생성 특징들**:
+1. **과도한 열거와 구조화**: "The main contributions are:" + 정확히 4개 bullet points
+2. **일반적/모호한 표현**: "Modern wireless networks face...", "significant improvements"
+3. **전형적 AI 문구 패턴**: "This paper presents...", "However, these methods fail..."
+4. **기계적 연결**: 부자연스러운 문단 전환
+
+**개선 결과**:
+- **Introduction 개선**: 구체적 기술 맥락으로 시작 ("Dense Wi-Fi deployments...")
+- **시나리오 예시**: 더 기술적이고 구체적인 trade-off 설명
+- **기여도 서술**: bullet point → 자연스러운 문단 흐름으로 변경
+- **Related Work 재구성**: NPCA → RL 순서로 논리적 흐름
+- **성능 결과**: "superior performance" → "15-25% higher reward" 구체적 수치
+
+### 36. 베이스라인 평가 시스템 개선 ✅
+**목적**: 훈련과 동일한 환경에서 공정한 성능 비교
+
+**주요 수정사항**:
+- **PPDU Duration**: 고정값 대신 랜덤 PPDU (20-200 슬롯) 사용
+- **환경 통일**: 모든 평가가 훈련 조건과 동일한 설정 사용
+- **STA 초기화 오류 수정**: `ppdu_duration_range` 파라미터 제거
+- **출력 개선**: "PPDU: Random (20-200 slots)" 정확한 상태 표시
+
+**기술적 개선**:
+```python
+# 베이스라인 평가에서 랜덤 PPDU 사용
+def create_baseline_config(obss_duration=None, ppdu_variant='medium', random_ppdu=False):
+    # random_ppdu=True일 때 STA 내부에서 자동 랜덤 생성
+    sta = STA(..., random_ppdu=random_ppdu, ...)
+```
+
+---
+
+## 📊 최종 논문 구조 및 품질 개선 (2025-09-18)
+
+### 논문 구조 최적화
+**4페이지 제한 준수**:
+- Introduction + Related Work 통합으로 공간 절약
+- 핵심 수식과 알고리즘 유지하면서 설명 간소화
+- 중복 내용 제거 및 효율적 서술 구조
+
+### AI 생성 특성 완전 제거
+**Before vs After**:
+```
+Before: "Modern wireless networks face increasing challenges..."
+After:  "Dense Wi-Fi deployments in enterprise environments..."
+
+Before: Bullet-point contributions list
+After:  Natural paragraph flow with specific metrics
+
+Before: "superior performance compared to static strategies"
+After:  "15-25% higher average reward with convergence in 400-600 episodes"
+```
+
+### 실험 환경 일관성 보장
+**통일된 평가 기준**:
+- 훈련과 동일한 랜덤 PPDU duration (20-200 슬롯)
+- 동일한 OBSS 발생률 및 지속시간
+- 공정한 베이스라인 비교 환경
+
+---
+
+## 💡 최종 인사이트 및 교훈 (2025-09-18)
+
+### 1. 학술 논문 작성 원칙
+- **구체성이 신뢰성**: 모호한 표현보다 정확한 수치와 조건 명시
+- **자연스러운 흐름**: 기계적 구조보다 논리적 연결과 자연스러운 서술
+- **한계점 인정**: 솔직한 한계 인정이 연구의 신뢰성과 향후 발전 가능성 제시
+
+### 2. 실험 설계의 중요성
+- **환경 일관성**: 훈련-테스트 환경 불일치는 결과 신뢰성을 크게 훼손
+- **공정한 비교**: 동일한 조건에서만 의미 있는 성능 비교 가능
+- **상세한 문서화**: 모든 설정과 파라미터의 정확한 기록 필수
+
+### 3. AI 도구 활용 시 주의점
+- **AI 생성 패턴 인식**: 전형적인 구조와 표현을 피하고 자연스러운 서술 지향
+- **기술적 정확성**: AI 제안을 맹신하지 말고 도메인 지식으로 검증
+- **창의적 사고**: AI는 도구일 뿐, 핵심 아이디어와 인사이트는 인간의 창의성
+
+---
+
+**최종 작업 완료 일시**: 2025-09-18
+**전체 프로젝트 성과**:
+- **완성된 IEEE 논문**: 4페이지 분량의 학술 논문 초안 완성
+- **공정한 평가 시스템**: 일관된 환경에서의 성능 비교 체계 구축
+- **개선된 DRL 프레임워크**: Semi-MDP 기반 NPCA 학습 시스템 완성
+- **종합적 분석 도구**: 다양한 분석 및 비교 스크립트 개발
+- **실용적 가이드라인**: 향후 연구를 위한 상세한 문서 및 인사이트 정리
