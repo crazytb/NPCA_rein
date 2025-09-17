@@ -20,7 +20,7 @@ from drl_framework.configs import (
     DEFAULT_NUM_STAS_CH1,
 )
 
-def create_baseline_config(obss_duration=None, ppdu_variant='medium'):
+def create_baseline_config(obss_duration=None, ppdu_variant='medium', random_ppdu=False):
     """training과 동일한 설정 생성"""
     obss_duration = obss_duration or 100
     ppdu_duration = PPDU_DURATION_VARIANTS.get(ppdu_variant, PPDU_DURATION)
@@ -74,7 +74,7 @@ class FixedPolicy:
         return np.random.choice([0, 1])
 
 def evaluate_baseline_policy(policy_func, policy_name, channels, stas_config,
-                           num_episodes=50, num_slots_per_episode=1000, random_ppdu=False):
+                           num_episodes=100, num_slots_per_episode=11111, random_ppdu=False):
     """baseline 정책 평가 (training과 동일한 환경)"""
 
     print(f"Evaluating {policy_name}...")
@@ -170,18 +170,20 @@ def evaluate_baseline_policy(policy_func, policy_name, channels, stas_config,
     }
 
 def run_baseline_comparison(obss_duration=100, ppdu_variant='medium',
-                          num_episodes=50, num_slots_per_episode=1000, random_ppdu=False):
+                          num_episodes=100, num_slots_per_episode=11111, random_ppdu=False):
     """모든 baseline 정책 비교"""
+
+    ppdu_description = "Random (20-200 slots)" if random_ppdu else f"{ppdu_variant} (fixed)"
 
     print(f"\n{'='*60}")
     print(f"BASELINE POLICY COMPARISON")
-    print(f"OBSS Duration: {obss_duration}, PPDU Variant: {ppdu_variant}")
+    print(f"OBSS Duration: {obss_duration}, PPDU: {ppdu_description}")
     print(f"Episodes: {num_episodes}, Slots per episode: {num_slots_per_episode}")
     print(f"STA Configuration: CH0={DEFAULT_NUM_STAS_CH0}, CH1={DEFAULT_NUM_STAS_CH1}")
     print(f"{'='*60}")
 
     # 환경 설정 (training과 동일)
-    channels, stas_config = create_baseline_config(obss_duration, ppdu_variant)
+    channels, stas_config = create_baseline_config(obss_duration, ppdu_variant, random_ppdu)
 
     results = []
 
@@ -219,7 +221,7 @@ def run_baseline_comparison(obss_duration=100, ppdu_variant='medium',
 
     return results
 
-def evaluate_drl_policy(model_path, channels, stas_config, num_episodes=50, num_slots_per_episode=1000, random_ppdu=False):
+def evaluate_drl_policy(model_path, channels, stas_config, num_episodes=100, num_slots_per_episode=11111, random_ppdu=False):
     """DRL 정책을 baseline과 동일한 환경에서 평가"""
 
     try:
@@ -328,7 +330,7 @@ def evaluate_drl_policy(model_path, channels, stas_config, num_episodes=50, num_
         action_probs = [count/max(total_actions, 1) for count in action_counts]
 
         return {
-            'policy_name': 'DRL (Evaluated)',
+            'policy_name': 'DRL',
             'episode_rewards': episode_rewards,
             'avg_reward': avg_reward,
             'std_reward': std_reward,
@@ -341,7 +343,7 @@ def evaluate_drl_policy(model_path, channels, stas_config, num_episodes=50, num_
         print(f"Error evaluating DRL model: {e}")
         return None
 
-def compare_with_drl_model(obss_duration=100, ppdu_variant='medium', model_path=None):
+def compare_with_drl_model(obss_duration=100, ppdu_variant='medium', model_path=None, random_ppdu=True):
     """DRL 모델과 baseline 비교 (동일한 환경에서 실제 평가)"""
 
     if model_path is None:
@@ -357,10 +359,12 @@ def compare_with_drl_model(obss_duration=100, ppdu_variant='medium', model_path=
                 break
 
     # 환경 설정 (baseline과 동일)
-    channels, stas_config = create_baseline_config(obss_duration, ppdu_variant)
+    channels, stas_config = create_baseline_config(obss_duration, ppdu_variant, random_ppdu)
 
     # Baseline 결과
-    baseline_results = run_baseline_comparison(obss_duration, ppdu_variant)
+    baseline_results = run_baseline_comparison(obss_duration, ppdu_variant,
+                                             num_episodes=100, num_slots_per_episode=11111,
+                                             random_ppdu=random_ppdu)
 
     # DRL 모델 결과 (동일한 환경에서 실제 평가)
     drl_result = None
@@ -368,11 +372,11 @@ def compare_with_drl_model(obss_duration=100, ppdu_variant='medium', model_path=
         print(f"\n🤖 Evaluating DRL model: {model_path}")
         drl_result = evaluate_drl_policy(
             model_path, channels, stas_config,
-            num_episodes=50, num_slots_per_episode=1000, random_ppdu=False
+            num_episodes=100, num_slots_per_episode=11111, random_ppdu=True
         )
 
         if drl_result:
-            print(f"DRL (Evaluated): Avg Reward = {drl_result['avg_reward']:.2f} ± {drl_result['std_reward']:.2f}")
+            print(f"DRL: Avg Reward = {drl_result['avg_reward']:.2f} ± {drl_result['std_reward']:.2f}")
             print(f"  Action Dist: Stay={drl_result['action_distribution'][0]:.2f}, Switch={drl_result['action_distribution'][1]:.2f}")
     else:
         print("⚠️ No DRL model found for evaluation")
@@ -434,7 +438,7 @@ def create_comparison_plot(all_results, obss_duration=100):
     # ax1 plot을 별도로 PNG와 EPS로 저장
     fig1, ax1_single = plt.subplots(figsize=(8, 6))
     bars = ax1_single.bar(policies, rewards, color=colors)
-    ax1_single.set_title(f'Policy Comparison (OBSS Duration: {obss_duration})')
+    # ax1_single.set_title(f'Policy Comparison (OBSS Duration: {obss_duration})')
     ax1_single.set_ylabel('Average Reward')
     ax1_single.grid(True, alpha=0.3)
 
@@ -476,8 +480,8 @@ def main():
     print(f"🔍 Starting baseline evaluation...")
     print(f"Testing environment: OBSS Duration = {obss_duration} slots")
 
-    # Baseline과 DRL 모델 비교
-    baseline_results, drl_result = compare_with_drl_model(obss_duration)
+    # Baseline과 DRL 모델 비교 (랜덤 PPDU 사용)
+    baseline_results, drl_result = compare_with_drl_model(obss_duration, random_ppdu=True)
 
     # 요약 출력
     print(f"\n{'🎯 SUMMARY:'}")
