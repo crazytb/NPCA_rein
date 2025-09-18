@@ -1,15 +1,15 @@
 # Fdb version 3
-["bibtex npca"] 1758127572 "npca.aux" "npca.bbl" "npca" 1758127739
+["bibtex npca"] 1758177682 "npca.aux" "npca.bbl" "npca" 1758217096
   "./IEEEtran.bst" 1757514677 61632 1eded68932b68cdfaf04f54eba82634b ""
-  "npca.aux" 1758127739 3422 90b175371c637b24a664ae5103aa6b8c "pdflatex"
+  "npca.aux" 1758217096 3422 90b175371c637b24a664ae5103aa6b8c "pdflatex"
   "npca_references.bib" 1758123003 2330 e7b0fa94c0579bab9baba361c7ea4879 ""
   (generated)
   "npca.bbl"
   "npca.blg"
-["pdflatex"] 1758127739 "/home/crazytb/Code/NPCA_rein/manuscript/npca.tex" "npca.pdf" "npca" 1758127739
+["pdflatex"] 1758217096 "/home/crazytb/Code/NPCA_rein/manuscript/npca.tex" "npca.pdf" "npca" 1758217096
   "/etc/texmf/web2c/texmf.cnf" 1757083627 475 c0e671620eb5563b2130f56340a5fde8 ""
   "/home/crazytb/.texlive2021/texmf-var/web2c/pdftex/pdflatex.fmt" 1757086582 1405641 b3640e9491f4f41393750759fac6a73c ""
-  "/home/crazytb/Code/NPCA_rein/manuscript/npca.tex" 1758127739 23320 fb0b911b4bc8de57b91a221558edb93a ""
+  "/home/crazytb/Code/NPCA_rein/manuscript/npca.tex" 1758217096 23433 b2f0fc678c3ea9bed1c74244e308fcbb ""
   "/usr/share/texlive/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/share/texlive/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/adobe/courier/pcrr7t.tfm" 1136768653 960 379cc0019370a9e0208a0a3f949f847a ""
@@ -99,9 +99,9 @@
   "IEEEtran.cls" 1757514677 288304 b67b6fc6c2abb39f9b461923f5199343 ""
   "figure/loss_curves_ax7.eps" 1758120814 82498 eaca829cb75297f31d2436db73d6cc3f ""
   "figure/policy_comparison_obss_100.eps" 1758125689 25677 91e50c8763fbd3d5b55db472330b2fe2 ""
-  "npca.aux" 1758127739 3422 90b175371c637b24a664ae5103aa6b8c "pdflatex"
-  "npca.bbl" 1758127572 2616 d120151114bd7f7ee6370f0aca01a724 "bibtex npca"
-  "npca.tex" 1758127739 23320 fb0b911b4bc8de57b91a221558edb93a ""
+  "npca.aux" 1758217096 3422 90b175371c637b24a664ae5103aa6b8c "pdflatex"
+  "npca.bbl" 1758177682 2616 d120151114bd7f7ee6370f0aca01a724 "bibtex npca"
+  "npca.tex" 1758217096 23433 b2f0fc678c3ea9bed1c74244e308fcbb ""
   (generated)
   "npca.aux"
   "npca.log"

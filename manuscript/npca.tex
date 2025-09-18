@@ -14,7 +14,7 @@
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 \begin{document}
 
-\title{Deep Reinforcement Learning for Adaptive Non-Primary Channel Access in IEEE 802.11bn}
+\title{Adaptive Non-Primary Channel Access in IEEE 802.11bn with Deep Reinforcement Learning}
 % Remove funding footnote for now - add back if needed
 % \thanks{Identify applicable funding agency here. If none, delete this.}
 
@@ -29,7 +29,7 @@ twsong@sch.ac.kr}
 \maketitle
 
 \begin{abstract}
-Efficient spectrum utilization is critical in modern Wi-Fi networks as traditional systems require primary channel occupancy for transmission, limiting efficiency in overlapping BSS (OBSS) environments. IEEE 802.11bn introduces non-primary channel access (NPCA) capability, yet optimal decision strategies remain challenging. This paper presents a deep reinforcement learning approach for adaptive NPCA decision-making using Semi-Markov Decision Process formulation with Deep Q-Network. Simulations across varying network scenarios demonstrate significant throughput improvements over baseline strategies, with contention window index as the most critical decision factor. The learning algorithm exhibits conservative strategies favoring long-term stability, providing insights for next-generation Wi-Fi channel access mechanisms.
+Efficient spectrum utilization is critical in modern Wi-Fi networks as traditional systems require primary channel occupancy for transmission, limiting efficiency in overlapping BSS (OBSS) environments. IEEE 802.11bn introduces non-primary channel access (NPCA) capability, yet optimal decision strategies remain challenging. This paper presents a deep reinforcement learning approach for adaptive NPCA decision-making using Semi-Markov Decision Process formulation with Deep Q-Network. Trainings across varying network density scenarios demonstrate that our approach achieves stable convergence and significant throughput improvements over baseline strategies are observed. The learning algorithm exhibits conservative strategies favoring long-term stability, providing insights for next-generation Wi-Fi channel access mechanisms.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -40,13 +40,13 @@ Deep Reinforcement Learning, Non-Primary Channel Access, Wi-Fi Networks, Semi-MD
 
 Dense Wi-Fi deployments in enterprise and residential environments create significant spectrum utilization challenges, particularly when overlapping BSS (OBSS) traffic occupies primary channels while secondary channels remain idle. Traditional channel access mechanisms, while effective in controlled scenarios, fail to adapt to the dynamic interference patterns characteristic of high-density networks.
 
-IEEE 802.11 systems traditionally require the primary channel to be idle before wide-band transmissions can occur \cite{wei2024non}. This constraint leads to significant spectrum waste when secondary channels remain unused despite primary channel occupancy by overlapping BSS (OBSS) traffic. While IEEE 802.11bn introduces non-primary channel access (NPCA) capability \cite{bellalta2025performance}, existing approaches rely on static heuristics that cannot adapt to dynamic network conditions, leaving a critical gap in intelligent decision-making strategies.
+IEEE 802.11 systems traditionally require the primary channel to be idle before wide-band transmissions can occur~\cite{wei2024non}. This constraint leads to significant spectrum waste when secondary channels remain unused despite primary channel occupancy by overlapping BSS (OBSS) traffic. While IEEE 802.11bn introduces non-primary channel access (NPCA) capability~\cite{bellalta2025performance}, existing approaches rely on static heuristics that cannot adapt to dynamic network conditions, leaving a critical gap in intelligent decision-making strategies.
 
 When a station encounters OBSS interference during backoff, it faces a critical timing decision: wait for the primary channel to become available or immediately switch to an NPCA channel. This decision involves trade-offs between guaranteed transmission opportunities and potential switching overhead, with the optimal choice depending on current contention window state, remaining OBSS duration, and planned transmission length. 
 
 In this paper, we describe an intelligent NPCA decision-making framework that enables stations to learn optimal channel access policies through interaction with dynamic network environments. We formulate this as an online learning problem where stations adapt their behavior based on observed network states and reward feedback.
 
-Our approach employs deep reinforcement learning, specifically a Semi-Markov Decision Process (Semi-MDP) formulation with Deep Q-Network (DQN) \cite{mnih2013playing, mnih2015human}, to capture temporal dependencies in NPCA decisions. The framework enables stations to learn from experience and adapt to varying OBSS patterns and network densities.
+Our approach employs deep reinforcement learning, specifically a Semi-Markov Decision Process (Semi-MDP) formulation with Deep Q-Network (DQN)~\cite{mnih2013playing, mnih2015human}, to capture temporal dependencies in NPCA decisions. The framework enables stations to learn from experience and adapt to varying OBSS patterns and network densities.
 
 Our work makes three key contributions. We develop a Semi-MDP framework that captures the temporal nature of NPCA decisions, accounting for irregular decision intervals and option-based state transitions. We implement a DQN-based learning approach that enables stations to adapt their channel access policies based on network conditions and historical performance. Through extensive simulation, we demonstrate 15-25\% reward improvements over static baseline policies and identify contention window index as the primary decision factor in NPCA scenarios.
 
@@ -54,9 +54,9 @@ The remainder of this paper is organized as follows. Section II reviews related 
 
 \section{Related Work}
 
-NPCA mechanisms have been extensively studied in the context of spectrum efficiency improvement. Traditional approaches rely on heuristic rules and static thresholds for channel switching decisions \cite{wei2024optimized}, typically using fixed parameters such as OBSS detection thresholds or predetermined switching delays. These methods work well in controlled environments but fail to adapt to dynamic network conditions and varying traffic patterns characteristic of real deployments.
+NPCA mechanisms have been extensively studied in the context of spectrum efficiency improvement. Traditional approaches rely on heuristic rules and static thresholds for channel switching decisions~\cite{wei2024optimized}, typically using fixed parameters such as OBSS detection thresholds or predetermined switching delays. These methods work well in controlled environments but fail to adapt to dynamic network conditions and varying traffic patterns characteristic of real deployments.
 
-Reinforcement learning has emerged as a promising approach for wireless network optimization \cite{mnih2013playing}, with recent applications spanning resource allocation, interference management, and protocol adaptation. Semi-MDP formulations have proven particularly effective in capturing temporal dependencies in wireless environments \cite{sutton2018reinforcement}, where decision intervals are irregular and actions have extended temporal effects.
+Reinforcement learning has emerged as a promising approach for wireless network optimization~\cite{mnih2013playing}, with recent applications spanning resource allocation, interference management, and protocol adaptation. Semi-MDP formulations have proven particularly effective in capturing temporal dependencies in wireless environments~\cite{sutton2018reinforcement}, where decision intervals are irregular and actions have extended temporal effects.
 
 Existing NPCA studies focus primarily on theoretical analysis and static optimization, leaving a significant gap in adaptive approaches that can respond to real-time network dynamics. Our work bridges this gap by applying Semi-MDP learning to the NPCA decision problem.
 
@@ -298,14 +298,14 @@ This paper presented a DRL-based approach for adaptive NPCA decision-making in I
 
 % Key findings include the importance of contention window index as a decision factor and the effectiveness of conservative learning strategies.
 
-However, our approach has several limitations that constrain its applicability to real-world dynamic wireless environments. First, the fixed network topology with predetermined STA counts (2, 10, and 20 per channel) does not reflect the dynamic nature of practical wireless networks where stations continuously join and leave. Second, the single-agent learning framework may not capture the complex interactions in multi-agent scenarios where multiple stations simultaneously employ learning-based NPCA decisions. Third, the current reward structure and state space design may not generalize well to environments with significantly different network densities or traffic patterns than those used in training.
+However, our approach has several limitations that constrain its applicability to real-world dynamic wireless environments. First, the fixed network topology with predetermined STA counts (2, 10, and 20 per channel) does not reflect the dynamic nature of practical wireless networks where stations continuously join and leave. Second, the single-agent learning framework suffers from coordination problems in multi-agent scenarios—when multiple stations simultaneously switch to NPCA channels, the secondary channel becomes congested, potentially yielding worse performance than fixed baseline strategies. Third, the current reward structure and state space design may not generalize well to environments with significantly different network densities or traffic patterns than those used in training.
 
-Future work will address these limitations through several research directions. First, extending the framework to multi-agent scenarios where multiple learning stations can interact and coordinate their decisions. Second, developing adaptive mechanisms to handle dynamic network topologies with varying station participation. Third, exploring more sophisticated reward structures that capture complex network performance objectives beyond individual throughput optimization.
+Future work will address these limitations through several research directions. Extending the framework to multi-agent scenarios where multiple learning stations can interact and coordinate their decisions is essential to mitigate channel congestion issues. Additionally, developing adaptive mechanisms to handle dynamic network topologies with varying station participation will improve practical applicability. More sophisticated reward structures that capture complex network performance objectives beyond individual throughput optimization should also be explored to enhance learning effectiveness.
 
 
 \section*{Acknowledgment}
 
-This research was supported by the MSIT (Ministry of Science and ICT), Korea, under the National Program for Excellence in SW, supervised by the IITP (Institute of Information \& Communications Technology Planning \& Evaluation) in 2025 (2021-0-01399).
+This work was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government(MSIT) (No. 2022R1F1A1076069).
 
 
 \bibliographystyle{IEEEtran}
